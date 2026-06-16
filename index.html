@@ -3,124 +3,664 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>annotate.js — live demo</title>
+  <title>annotate.js — review anything, right on the page</title>
+  <meta name="description" content="A drop-in visual review & annotation layer for any website. Highlight, draw, pin and comment — local-only, zero backend, one script tag." />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
   <style>
-    :root { --ink:#17171f; --muted:#6b6b76; --line:#e6e6ec; --accent:#6d28d9; }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0; color: var(--ink); background: #fff;
-      font: 16px/1.65 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-      -webkit-font-smoothing: antialiased;
+    :root {
+      --paper:#FBFAF8;
+      --paper-2:#F5F3EE;
+      --ink:#1A1A22;
+      --ink-soft:#3A3A45;
+      --muted:#6B6B76;
+      --faint:#9A9AA3;
+      --line:#E8E5DE;
+      --line-strong:#D9D5CC;
+      --accent:#6D28D9;
+      --accent-2:#8B5CF6;
+      --accent-soft:#F3ECFE;
+      --amber:#FCD34D;
+      --amber-wash:#FEF3C7;
+      --teal:#0EA5A5;
+      --rose:#F43F5E;
+
+      --serif:"Fraunces", Georgia, "Times New Roman", serif;
+      --sans:"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      --mono:"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+      --measure:42rem;
+      --wide:64rem;
     }
-    .wrap { max-width: 720px; margin: 0 auto; padding: 64px 24px 140px; }
-    header { margin-bottom: 48px; }
-    .badge { display:inline-block; font-size:12px; font-weight:700; letter-spacing:.08em;
-      text-transform:uppercase; color:var(--accent); background:#f3e8ff; padding:5px 11px;
-      border-radius:99px; margin-bottom:18px; }
-    h1 { font-size: 44px; line-height:1.1; letter-spacing:-.02em; margin:0 0 14px; }
-    h2 { font-size: 26px; letter-spacing:-.01em; margin:48px 0 14px; }
-    h3 { font-size: 18px; margin:32px 0 8px; }
-    p { color:#33333d; margin:0 0 16px; }
-    .lead { font-size:20px; color:var(--muted); }
-    .hint { background:#faf8ff; border:1px solid #ece4ff; border-left:4px solid var(--accent);
-      border-radius:0 10px 10px 0; padding:14px 18px; margin:22px 0; }
-    figure { margin:28px 0; padding:28px; background:#f7f7fa; border:1px solid var(--line);
-      border-radius:16px; text-align:center; }
-    code { background:#f1f1f5; padding:2px 6px; border-radius:5px; font-size:.9em; }
-    pre { background:#17171f; color:#ededf2; padding:18px 20px; border-radius:12px;
-      overflow:auto; font-size:13.5px; }
-    blockquote { border-left:4px solid var(--line); margin:24px 0; padding:4px 0 4px 20px;
-      color:var(--muted); font-style:italic; }
-    .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:24px 0; }
-    .card { border:1px solid var(--line); border-radius:14px; padding:20px; }
-    footer { margin-top:64px; padding-top:24px; border-top:1px solid var(--line);
-      color:var(--muted); font-size:14px; }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 17px;
+      line-height: 1.7;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+    img, svg { max-width: 100%; display: block; }
+
+    .wide { max-width: var(--wide); margin: 0 auto; padding: 0 1.5rem; }
+    .shell { max-width: var(--measure); margin: 0 auto; padding: 0 1.5rem; }
+
+    /* ---------------- NAV ---------------- */
+    .nav {
+      position: sticky; top: 0; z-index: 50;
+      background: rgba(251,250,248,.82);
+      backdrop-filter: saturate(180%) blur(12px);
+      border-bottom: 1px solid var(--line);
+    }
+    .nav-inner {
+      max-width: var(--wide); margin: 0 auto; padding: .9rem 1.5rem;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .wordmark {
+      font-family: var(--serif); font-weight: 600; font-size: 1.25rem;
+      letter-spacing: -0.01em; color: var(--ink); text-decoration: none;
+      display: flex; align-items: center; gap: .55rem;
+    }
+    .wordmark .dot { color: var(--accent); }
+    .nav-links { display: flex; align-items: center; gap: 1.8rem; }
+    .nav-links a {
+      font-size: .92rem; color: var(--ink-soft); text-decoration: none; font-weight: 500;
+      transition: color .15s;
+    }
+    .nav-links a:hover { color: var(--accent); }
+    .nav-links .nav-cta {
+      background: var(--ink); color: #fff; padding: .5rem .95rem; border-radius: 8px;
+    }
+    .nav-links .nav-cta:hover { background: var(--accent); color:#fff; }
+    @media (max-width: 720px) { .nav-links a:not(.nav-cta) { display:none; } }
+
+    /* ---------------- HERO ---------------- */
+    .eyebrow {
+      font-family: var(--mono); font-size: .72rem; letter-spacing: .18em;
+      text-transform: uppercase; color: var(--accent);
+      display: inline-flex; align-items: center; gap: .6rem;
+    }
+    .eyebrow::before { content:""; width: 1.6rem; height: 1px; background: var(--accent); opacity:.5; }
+
+    header.hero { padding: 5.5rem 0 3rem; text-align: center; }
+    header.hero .eyebrow { margin-bottom: 1.6rem; }
+    h1 {
+      font-family: var(--serif); font-weight: 500;
+      font-size: clamp(2.7rem, 6.5vw, 4.8rem); line-height: 1.02;
+      letter-spacing: -0.02em; margin: 0 auto 1.4rem; max-width: 16ch;
+    }
+    h1 .ink-mark { font-style: italic; font-weight: 400; position: relative; white-space: nowrap; }
+    h1 .ink-mark::after {
+      content:""; position:absolute; left:-2px; right:-2px; bottom:.08em; height:.42em;
+      background: var(--amber); opacity:.55; z-index:-1; transform: rotate(-.6deg); border-radius:2px;
+    }
+    .lead {
+      font-size: 1.3rem; line-height: 1.55; color: var(--ink-soft);
+      max-width: 38rem; margin: 0 auto 2.2rem;
+    }
+    .cta-row { display:flex; flex-wrap:wrap; gap:.8rem; align-items:center; justify-content:center; }
+    .btn {
+      font-family: var(--sans); font-size:.95rem; font-weight:500;
+      padding:.74rem 1.35rem; border-radius:10px; border:1px solid transparent;
+      cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; gap:.5rem;
+      transition: transform .12s ease, box-shadow .2s ease, background .2s ease;
+    }
+    .btn-primary {
+      background: var(--accent); color:#fff;
+      box-shadow: 0 1px 2px rgba(109,40,217,.25), 0 8px 24px -8px rgba(109,40,217,.5);
+    }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 2px 4px rgba(109,40,217,.3), 0 14px 32px -10px rgba(109,40,217,.55); }
+    .btn-ghost { background:#fff; color: var(--ink); border-color: var(--line-strong); }
+    .btn-ghost:hover { background: var(--paper-2); }
+    .try-note { font-family: var(--mono); font-size:.78rem; color:var(--faint); margin-top:1.5rem; }
+    .try-note kbd {
+      font-family: var(--mono); font-size:.72rem; background:#fff;
+      border:1px solid var(--line-strong); border-bottom-width:2px; border-radius:5px;
+      padding:.12em .42em; color:var(--ink-soft);
+    }
+
+    /* ---- hero browser mockup ---- */
+    .hero-art { max-width: 60rem; margin: 3.5rem auto 0; padding: 0 1.5rem; }
+    .browser {
+      background:#fff; border:1px solid var(--line-strong); border-radius:16px;
+      box-shadow: 0 2px 4px rgba(26,26,34,.04), 0 40px 80px -40px rgba(26,26,34,.4);
+      overflow:hidden;
+    }
+    .browser-bar {
+      display:flex; align-items:center; gap:.6rem; padding:.8rem 1rem;
+      border-bottom:1px solid var(--line); background: var(--paper-2);
+    }
+    .browser-bar .dots { display:flex; gap:.4rem; }
+    .browser-bar .dots i { width:11px; height:11px; border-radius:50%; background:var(--line-strong); display:block; }
+    .browser-bar .url {
+      flex:1; background:#fff; border:1px solid var(--line); border-radius:7px;
+      padding:.32rem .7rem; font-family:var(--mono); font-size:.72rem; color:var(--faint);
+      text-align:center;
+    }
+    .browser-body { position:relative; padding: 2.2rem; }
+    .mock-h { font-family:var(--serif); font-size:1.5rem; font-weight:600; margin:0 0 1rem; letter-spacing:-.01em; }
+    .mock-p { font-size:.95rem; color:var(--ink-soft); margin:0 0 .9rem; max-width:34rem; }
+    .mock-hl { background: linear-gradient(180deg, transparent 55%, rgba(252,211,77,.6) 55%); }
+    .mock-rect {
+      position:absolute; border:2px solid var(--accent); border-radius:6px;
+      background: rgba(109,40,217,.06);
+    }
+    .mock-pin {
+      position:absolute; width:26px; height:26px; border-radius:50% 50% 50% 2px;
+      background:var(--accent); transform: rotate(45deg);
+      box-shadow:0 6px 16px -4px rgba(109,40,217,.6);
+    }
+    .mock-pin span { transform: rotate(-45deg); display:block; color:#fff; font-size:.7rem; font-weight:600; text-align:center; line-height:26px; }
+    .mock-card {
+      position:absolute; background:#fff; border:1px solid var(--line);
+      border-radius:10px; padding:.7rem .8rem; width:200px; font-size:.78rem; line-height:1.45;
+      box-shadow: 0 1px 2px rgba(26,26,34,.05), 0 16px 36px -18px rgba(26,26,34,.4);
+    }
+    .mock-card .who { display:flex; align-items:center; gap:.45rem; margin-bottom:.35rem; }
+    .mock-card .av { width:20px;height:20px;border-radius:50%;color:#fff;font-size:.6rem;font-weight:600;display:flex;align-items:center;justify-content:center;flex:none; }
+    .mock-card .nm { font-weight:600; font-size:.72rem; }
+    @media (max-width: 640px) { .mock-card, .mock-rect, .mock-pin { display:none; } .browser-body{padding:1.4rem;} }
+
+    /* ---------------- LOGO STRIP ---------------- */
+    .logos { padding: 3rem 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); margin-top: 4rem; background: var(--paper-2); }
+    .logos p { text-align:center; font-family:var(--mono); font-size:.72rem; letter-spacing:.14em; text-transform:uppercase; color:var(--faint); margin:0 0 1.6rem; }
+    .logo-row { display:flex; flex-wrap:wrap; gap:2.5rem 3rem; align-items:center; justify-content:center; opacity:.65; }
+    .logo-row span { font-family:var(--serif); font-weight:600; font-size:1.15rem; color:var(--ink-soft); letter-spacing:-.01em; display:flex; align-items:center; gap:.5rem; }
+    .logo-row span svg { opacity:.8; }
+
+    /* ---------------- SECTIONS ---------------- */
+    section { padding: 4.5rem 0; }
+    .section-head { margin-bottom: 2.4rem; }
+    .section-head.center { text-align:center; }
+    .section-head .num { font-family:var(--mono); font-size:.78rem; color:var(--accent); display:block; margin-bottom:.7rem; }
+    h2 {
+      font-family:var(--serif); font-weight:500; font-size:clamp(1.9rem, 4vw, 2.7rem);
+      line-height:1.08; letter-spacing:-.015em; margin:0; max-width:20ch;
+    }
+    .section-head.center h2 { margin:0 auto; }
+    .section-head p { color:var(--muted); max-width:40rem; margin:1rem 0 0; font-size:1.08rem; }
+    .section-head.center p { margin-left:auto; margin-right:auto; }
+    h3 { font-family:var(--sans); font-weight:600; font-size:1.05rem; letter-spacing:-.005em; margin:0 0 .35rem; }
+    p { margin:0 0 1.15rem; color:var(--ink-soft); }
+    .muted { color: var(--muted); }
+    code.inline {
+      font-family:var(--mono); font-size:.85em; background:var(--paper-2);
+      border:1px solid var(--line); border-radius:5px; padding:.08em .4em;
+    }
+
+    /* alternating feature rows */
+    .feature-row { display:grid; grid-template-columns: 1fr 1fr; gap:3.5rem; align-items:center; }
+    .feature-row + .feature-row { margin-top: 4.5rem; }
+    .feature-row.flip .ft-art { order: -1; }
+    .ft-copy .tag { font-family:var(--mono); font-size:.72rem; letter-spacing:.12em; text-transform:uppercase; color:var(--accent); margin-bottom:.8rem; display:block; }
+    .ft-copy h3 { font-family:var(--serif); font-weight:500; font-size:1.7rem; line-height:1.12; letter-spacing:-.01em; margin-bottom:.8rem; }
+    .ft-copy p { font-size:1.02rem; color:var(--muted); margin-bottom:0; }
+    .ft-art {
+      background:#fff; border:1px solid var(--line); border-radius:18px; padding:1.8rem;
+      box-shadow: 0 1px 2px rgba(26,26,34,.03), 0 24px 50px -34px rgba(26,26,34,.3);
+    }
+    @media (max-width:760px){
+      .feature-row{ grid-template-columns:1fr; gap:1.8rem; }
+      .feature-row.flip .ft-art{ order:0; }
+    }
+
+    /* ---------------- FEATURE GRID ---------------- */
+    .features { display:grid; grid-template-columns:1fr 1fr 1fr; gap:0; border:1px solid var(--line); border-radius:16px; overflow:hidden; background:#fff; }
+    .feature { padding:1.7rem 1.5rem; border-right:1px solid var(--line); border-bottom:1px solid var(--line); }
+    .feature .ic { width:38px; height:38px; border-radius:10px; background:var(--accent-soft); display:flex; align-items:center; justify-content:center; margin-bottom:.9rem; }
+    .feature p { font-size:.92rem; margin:0; color:var(--muted); }
+    .features .feature:nth-child(3n){ border-right:none; }
+    .features .feature:nth-last-child(-n+3){ border-bottom:none; }
+    @media (max-width:760px){
+      .features{ grid-template-columns:1fr; }
+      .feature{ border-right:none !important; }
+      .feature:last-child{ border-bottom:none; }
+    }
+
+    /* ---------------- STATS ---------------- */
+    .stats { background:var(--ink); color:#fff; border-radius:22px; padding:3rem 2rem; }
+    .stat-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:1.5rem; text-align:center; }
+    .stat .n { font-family:var(--serif); font-weight:500; font-size:clamp(2rem,5vw,3rem); letter-spacing:-.02em; color:#fff; line-height:1; }
+    .stat .n em { color: var(--amber); font-style:normal; }
+    .stat .l { font-family:var(--mono); font-size:.72rem; letter-spacing:.08em; text-transform:uppercase; color:rgba(255,255,255,.55); margin-top:.6rem; }
+    @media (max-width:640px){ .stat-grid{ grid-template-columns:1fr 1fr; gap:2rem 1rem; } }
+
+    /* ---------------- USE CASES ---------------- */
+    .cases { display:grid; grid-template-columns:repeat(3,1fr); gap:1.2rem; }
+    .case { background:#fff; border:1px solid var(--line); border-radius:14px; padding:1.5rem; transition: transform .15s, box-shadow .2s; }
+    .case:hover { transform: translateY(-3px); box-shadow:0 18px 40px -24px rgba(26,26,34,.3); }
+    .case .badge { font-family:var(--mono); font-size:.68rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent); }
+    .case h3 { margin:.6rem 0 .4rem; font-family:var(--serif); font-weight:500; font-size:1.25rem; }
+    .case p { font-size:.92rem; color:var(--muted); margin:0; }
+    @media (max-width:760px){ .cases{ grid-template-columns:1fr; } }
+
+    /* ---------------- TESTIMONIALS ---------------- */
+    .quotes { display:grid; grid-template-columns:1fr 1fr; gap:1.4rem; }
+    .quote { background:#fff; border:1px solid var(--line); border-radius:16px; padding:1.8rem; }
+    .quote p { font-family:var(--serif); font-size:1.2rem; line-height:1.45; color:var(--ink); font-style:italic; margin:0 0 1.3rem; }
+    .quote .by { display:flex; align-items:center; gap:.7rem; }
+    .quote .av { width:38px;height:38px;border-radius:50%;color:#fff;font-weight:600;font-size:.8rem;display:flex;align-items:center;justify-content:center;flex:none; }
+    .quote .nm { font-weight:600; font-size:.9rem; }
+    .quote .ro { font-size:.78rem; color:var(--faint); }
+    @media (max-width:640px){ .quotes{ grid-template-columns:1fr; } }
+
+    /* ---------------- INSTALL ---------------- */
+    .install-card { background:#14141c; border-radius:16px; padding:1.6rem; box-shadow:0 24px 60px -30px rgba(20,20,28,.6); }
+    .install-card .bar { display:flex; gap:.45rem; margin-bottom:1.1rem; }
+    .install-card .bar i { width:11px;height:11px;border-radius:50%;background:#3a3a48;display:block; }
+    pre { margin:0; font-family:var(--mono); font-size:.82rem; line-height:1.7; color:#E7E5EE; overflow-x:auto; }
+    pre .tag{color:#C4A8FF;} pre .attr{color:#87E8C8;} pre .str{color:#FBD38D;}
+    .install-foot { font-family:var(--mono); font-size:.76rem; color:var(--faint); margin-top:1rem; text-align:center; }
+    .steps { counter-reset:step; margin-top:2.5rem; display:grid; grid-template-columns:repeat(3,1fr); gap:1.5rem; }
+    .step .marker { counter-increment:step; font-family:var(--serif); font-size:1.6rem; color:var(--accent); display:block; margin-bottom:.5rem; }
+    .step .marker::before { content: counter(step, decimal-leading-zero); }
+    .step p { font-size:.92rem; color:var(--muted); margin:0; }
+    @media (max-width:640px){ .steps{ grid-template-columns:1fr; gap:1.5rem; } }
+
+    /* ---------------- FAQ ---------------- */
+    .faq details { border-bottom:1px solid var(--line); padding:1.2rem 0; }
+    .faq summary {
+      font-family:var(--sans); font-weight:600; font-size:1.05rem; cursor:pointer;
+      list-style:none; display:flex; justify-content:space-between; align-items:center; gap:1rem;
+    }
+    .faq summary::-webkit-details-marker { display:none; }
+    .faq summary::after { content:"+"; color:var(--accent); font-size:1.4rem; font-weight:400; line-height:1; }
+    .faq details[open] summary::after { content:"–"; }
+    .faq p { margin:.9rem 0 0; color:var(--muted); font-size:.98rem; max-width:46rem; }
+
+    /* ---------------- CTA ---------------- */
+    .cta-band { text-align:center; background: linear-gradient(160deg, var(--accent) 0%, #5b1fb8 100%); color:#fff; border-radius:24px; padding:4rem 2rem; }
+    .cta-band h2 { color:#fff; margin:0 auto 1rem; max-width:18ch; }
+    .cta-band p { color:rgba(255,255,255,.82); max-width:34rem; margin:0 auto 2rem; }
+    .cta-band .btn-primary { background:#fff; color:var(--accent); box-shadow:0 14px 30px -12px rgba(0,0,0,.4); }
+    .cta-band .btn-ghost { background:transparent; color:#fff; border-color:rgba(255,255,255,.4); }
+    .cta-band .btn-ghost:hover { background:rgba(255,255,255,.12); }
+
+    /* ---------------- FOOTER ---------------- */
+    footer { margin-top:5rem; padding:4rem 0 3rem; border-top:1px solid var(--line); background:var(--paper-2); }
+    .foot-grid { display:grid; grid-template-columns:1.4fr 1fr 1fr 1fr; gap:2rem; }
+    .foot-grid h4 { font-family:var(--mono); font-size:.7rem; letter-spacing:.12em; text-transform:uppercase; color:var(--faint); margin:0 0 1rem; }
+    .foot-grid a { display:block; color:var(--muted); text-decoration:none; font-size:.92rem; margin-bottom:.6rem; }
+    .foot-grid a:hover { color:var(--accent); }
+    .foot-blurb { font-size:.92rem; color:var(--muted); max-width:22rem; margin:.9rem 0 0; }
+    .foot-bottom { max-width:var(--wide); margin:2.5rem auto 0; padding:1.6rem 1.5rem 0; border-top:1px solid var(--line); display:flex; justify-content:space-between; flex-wrap:wrap; gap:1rem; font-family:var(--mono); font-size:.74rem; color:var(--faint); }
+    @media (max-width:760px){ .foot-grid{ grid-template-columns:1fr 1fr; gap:2rem 1.5rem; } }
+
+    @media (prefers-reduced-motion: reduce){ html{scroll-behavior:auto;} .btn,.case{transition:none;} }
+    :focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:4px; }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <header>
-      <span class="badge">Live demo</span>
-      <h1>Review anything, right on the page.</h1>
+
+  <!-- ===== NAV ===== -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a class="wordmark" href="#top">
+        <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
+          <rect x="1.5" y="1.5" width="19" height="19" rx="5" stroke="#6D28D9" stroke-width="1.6"/>
+          <path d="M6 13.5L9.2 6.5L12.4 13.5M7 11.2H11.4" stroke="#6D28D9" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="15.5" cy="13" r="1.6" fill="#FCD34D"/>
+        </svg>
+        annotate<span class="dot">.</span>js
+      </a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#use-cases">Use cases</a>
+        <a href="#install">Install</a>
+        <a href="#faq">FAQ</a>
+        <a class="nav-cta" href="https://github.com/reviewjs/annotate" target="_blank" rel="noopener">GitHub ↗</a>
+      </div>
+    </div>
+  </nav>
+
+  <span id="top"></span>
+
+  <!-- ===== HERO ===== -->
+  <header class="hero">
+    <div class="shell">
+      <span class="eyebrow">Open source · zero backend</span>
+      <h1>Review anything, <span class="ink-mark">right on the page.</span></h1>
       <p class="lead">
-        This is a real, working demo of <strong>annotate.js</strong>. Look at the
-        floating toolbar in the bottom-right corner — pick a tool and start
-        marking up this page.
+        annotate.js is a drop-in review layer for any website. Highlight text,
+        draw, drop pins and leave threaded comments — anchored to real content,
+        saved in the browser, shared as a single JSON file.
       </p>
-      <div class="hint">
-        <strong>Try it:</strong> select any sentence to highlight it, press
-        <code>R</code> to draw a rectangle, or hover a paragraph and click the
-        <strong>+</strong> button that appears in the margin. Open the comments
-        panel with <code>A</code>, then hit <strong>Download</strong> to export
-        your notes as JSON.
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#install">Add it to your site</a>
+        <a class="btn btn-ghost" href="https://github.com/reviewjs/annotate" target="_blank" rel="noopener">⭐ Star on GitHub</a>
       </div>
-    </header>
+      <p class="try-note">
+        This page is live — select a sentence, or press
+        <kbd>R</kbd> draw · <kbd>P</kbd> pin · <kbd>A</kbd> comments
+      </p>
+    </div>
 
-    <h2>Why review on the live page?</h2>
-    <p>
-      Screenshots go stale, and describing "the third button under the hero" in
-      a chat thread is painful. annotate.js lets reviewers point at the exact
-      pixel and text they mean — highlights, boxes, pins and sketches all anchor
-      to real content, even as the page reflows.
-    </p>
+    <!-- hero browser mockup -->
+    <div class="hero-art">
+      <div class="browser">
+        <div class="browser-bar">
+          <span class="dots"><i></i><i></i><i></i></span>
+          <span class="url">yoursite.com/pricing</span>
+        </div>
+        <div class="browser-body">
+          <p class="mock-h">Simple, honest pricing</p>
+          <p class="mock-p">Start free and upgrade when your team grows. Every plan
+            includes <span class="mock-hl">unlimited projects and reviewers</span> —
+            no per-seat surprises at checkout.</p>
+          <p class="mock-p">Cancel anytime. We&rsquo;ll even help you export your data
+            on the way out, because it was always yours to begin with.</p>
 
-    <blockquote>
-      "Move this heading up, it competes with the logo." — a comment that only
-      makes sense when it's attached to the heading.
-    </blockquote>
-
-    <h2>Everything stays in your browser</h2>
-    <p>
-      There is no server here. Every comment you create on this page is saved in
-      your browser's <code>localStorage</code>. Refresh the page and your notes
-      are still there. When you're ready to share, export a small JSON file and
-      send it to a teammate — they import it and see your feedback in place.
-    </p>
-
-    <div class="grid">
-      <div class="card">
-        <h3>Highlight text</h3>
-        <p>Select any words and a comment popover appears instantly.</p>
+          <!-- annotations laid over the mock page -->
+          <div class="mock-rect" style="top:74px; left:24px; width:300px; height:30px;"></div>
+          <div class="mock-pin" style="top:150px; right:40px;"><span>2</span></div>
+          <div class="mock-card" style="top:96px; right:18px; background:#fff;">
+            <div class="who"><span class="av" style="background:#6D28D9;">JD</span><span class="nm">Jane</span></div>
+            Can we make &ldquo;unlimited&rdquo; bolder? It&rsquo;s the whole pitch.
+          </div>
+        </div>
       </div>
-      <div class="card">
-        <h3>Draw &amp; pin</h3>
-        <p>Rectangles, circles, freehand ink and point pins for visual notes.</p>
+    </div>
+  </header>
+
+  <!-- ===== LOGO STRIP ===== -->
+  <section class="logos" style="padding-top:3rem; padding-bottom:3rem;">
+    <div class="wide">
+      <p>Drops into anything that renders HTML</p>
+      <div class="logo-row">
+        <span>⚛&nbsp; React</span>
+        <span>▲&nbsp; Next.js</span>
+        <span>🟩&nbsp; Vue</span>
+        <span>🔷&nbsp; Svelte</span>
+        <span>W&nbsp; WordPress</span>
+        <span>◇&nbsp; Webflow</span>
+        <span>🛍&nbsp; Shopify</span>
       </div>
-      <div class="card">
-        <h3>Threaded replies</h3>
-        <p>Discuss each note, then resolve it when it's handled.</p>
+    </div>
+  </section>
+
+  <!-- ===== ALTERNATING FEATURES ===== -->
+  <section id="features" class="wide">
+    <div class="section-head center">
+      <span class="num">01 — WHAT IT DOES</span>
+      <h2>Feedback that points at the real thing</h2>
+      <p>Screenshots go stale and chat threads lose context. annotate.js keeps every
+         note attached to the exact content it&rsquo;s about.</p>
+    </div>
+
+    <div class="feature-row">
+      <div class="ft-copy">
+        <span class="tag">Highlight &amp; comment</span>
+        <h3>Select the words. Leave the note.</h3>
+        <p>Drag-select any text and a comment popover appears right where you are.
+           Highlights re-anchor with a prefix/suffix match, so they survive edits and
+           reflows instead of drifting off to the wrong paragraph.</p>
       </div>
-      <div class="card">
-        <h3>Download &amp; import</h3>
-        <p>Round-trip your review as a portable JSON file. No accounts.</p>
+      <div class="ft-art">
+        <svg viewBox="0 0 360 200" width="100%" role="img" aria-label="Text highlight with attached comment">
+          <rect width="360" height="200" rx="12" fill="#FBFAF8"/>
+          <rect x="24" y="28" width="240" height="9" rx="4.5" fill="#E0DCD3"/>
+          <rect x="24" y="48" width="300" height="9" rx="4.5" fill="#FEF3C7"/>
+          <rect x="24" y="48" width="180" height="9" rx="4.5" fill="#FCD34D"/>
+          <rect x="24" y="68" width="200" height="9" rx="4.5" fill="#E0DCD3"/>
+          <g transform="translate(150,96)">
+            <rect width="186" height="74" rx="12" fill="#fff" stroke="#E8E5DE"/>
+            <circle cx="22" cy="24" r="11" fill="#6D28D9"/>
+            <text x="22" y="28" font-family="Inter" font-size="9" fill="#fff" text-anchor="middle" font-weight="600">AG</text>
+            <rect x="40" y="17" width="70" height="7" rx="3.5" fill="#1A1A22"/>
+            <rect x="22" y="44" width="140" height="6" rx="3" fill="#C9C5BC"/>
+            <rect x="22" y="56" width="110" height="6" rx="3" fill="#C9C5BC"/>
+          </g>
+        </svg>
       </div>
     </div>
 
-    <h2>Add it to your own site</h2>
-    <p>One line, right before the closing <code>&lt;/body&gt;</code> tag:</p>
-    <pre>&lt;script src="https://cdn.jsdelivr.net/npm/@annotatejs/core/annotate.js" defer&gt;&lt;/script&gt;</pre>
-    <p>
-      That's the entire installation. See the
-      <a href="https://github.com/your-org/annotate.js#framework-integration">README</a>
-      for React, Vue, WordPress and more.
-    </p>
+    <div class="feature-row flip">
+      <div class="ft-copy">
+        <span class="tag">Draw · circle · pin · ink</span>
+        <h3>For everything words can&rsquo;t catch</h3>
+        <p>Box a misaligned button, circle a typo, drop a pin on a single pixel, or
+           sketch freehand over a layout. Each mark carries its own threaded comment
+           and a color, so visual feedback reads at a glance.</p>
+      </div>
+      <div class="ft-art">
+        <svg viewBox="0 0 360 200" width="100%" role="img" aria-label="A rectangle, circle, pin and freehand sketch on a page">
+          <rect width="360" height="200" rx="12" fill="#FBFAF8"/>
+          <rect x="28" y="30" width="120" height="50" rx="8" fill="#fff" stroke="#E8E5DE"/>
+          <rect x="24" y="26" width="128" height="58" rx="10" fill="none" stroke="#6D28D9" stroke-width="2.5"/>
+          <circle cx="270" cy="58" r="34" fill="none" stroke="#F43F5E" stroke-width="2.5"/>
+          <text x="270" y="62" font-family="Inter" font-size="11" fill="#9A9AA3" text-anchor="middle">logo</text>
+          <path d="M40 140 q30 -26 60 0 t60 0 t60 0" fill="none" stroke="#0EA5A5" stroke-width="2.5" stroke-linecap="round"/>
+          <g transform="translate(280,120)">
+            <path d="M13 0a13 13 0 0 1 13 13c0 9-13 24-13 24S0 22 0 13A13 13 0 0 1 13 0Z" fill="#6D28D9"/>
+            <circle cx="13" cy="13" r="5" fill="#fff"/>
+          </g>
+        </svg>
+      </div>
+    </div>
 
-    <figure>
-      A spacious figure block — try circling it (<code>C</code>) or dropping a
-      pin (<code>P</code>) on it.
-    </figure>
+    <div class="feature-row">
+      <div class="ft-copy">
+        <span class="tag">Local-first &amp; portable</span>
+        <h3>Your feedback never leaves the page</h3>
+        <p>There&rsquo;s no server and no database. Comments are saved to
+           <code class="inline">localStorage</code> on the reviewer&rsquo;s own device.
+           To share, export a small JSON file — your teammate imports it and sees every
+           note back in place. No accounts, no tracking.</p>
+      </div>
+      <div class="ft-art">
+        <svg viewBox="0 0 360 200" width="100%" role="img" aria-label="Comments exported as a JSON file and imported by a teammate">
+          <rect width="360" height="200" rx="12" fill="#FBFAF8"/>
+          <rect x="26" y="40" width="120" height="120" rx="10" fill="#fff" stroke="#E8E5DE"/>
+          <circle cx="56" cy="70" r="7" fill="#FCD34D"/><rect x="72" y="66" width="56" height="8" rx="4" fill="#E0DCD3"/>
+          <circle cx="56" cy="98" r="7" fill="#6D28D9"/><rect x="72" y="94" width="40" height="8" rx="4" fill="#E0DCD3"/>
+          <circle cx="56" cy="126" r="7" fill="#0EA5A5"/><rect x="72" y="122" width="50" height="8" rx="4" fill="#E0DCD3"/>
+          <path d="M150 100 h60" stroke="#9A9AA3" stroke-width="2" stroke-dasharray="4 4"/>
+          <path d="M204 94 l8 6 -8 6" fill="none" stroke="#9A9AA3" stroke-width="2"/>
+          <g transform="translate(222,64)">
+            <rect width="56" height="72" rx="8" fill="#14141c"/>
+            <text x="28" y="34" font-family="JetBrains Mono" font-size="9" fill="#87E8C8" text-anchor="middle">{ }</text>
+            <text x="28" y="50" font-family="JetBrains Mono" font-size="7" fill="#FBD38D" text-anchor="middle">.json</text>
+          </g>
+          <path d="M286 100 h22" stroke="#9A9AA3" stroke-width="2" stroke-dasharray="4 4"/>
+          <circle cx="326" cy="100" r="18" fill="#F3ECFE"/>
+          <text x="326" y="105" font-family="Inter" font-size="13" fill="#6D28D9" text-anchor="middle" font-weight="600">↓</text>
+        </svg>
+      </div>
+    </div>
+  </section>
 
-    <footer>
-      annotate.js · MIT licensed · open source. This page itself uses the
-      locally-hosted <code>annotate.js</code> below.
-    </footer>
-  </div>
+  <!-- ===== FEATURE GRID ===== -->
+  <section class="wide" style="padding-top:0;">
+    <div class="features">
+      <div class="feature">
+        <div class="ic"><svg width="18" height="18" viewBox="0 0 18 18"><path d="M3 13L7 3L11 13M4.5 9.5H9.5" stroke="#6D28D9" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <h3>Highlight text</h3><p>Select any words; a comment popover appears instantly.</p>
+      </div>
+      <div class="feature">
+        <div class="ic"><svg width="18" height="18" viewBox="0 0 18 18"><rect x="3" y="4" width="12" height="10" rx="2" stroke="#6D28D9" stroke-width="1.6" fill="none"/></svg></div>
+        <h3>Rectangle &amp; circle</h3><p>Box or ring any region that needs a closer look.</p>
+      </div>
+      <div class="feature">
+        <div class="ic"><svg width="18" height="18" viewBox="0 0 18 18"><path d="M9 2a5 5 0 0 1 5 5c0 4-5 9-5 9S4 11 4 7a5 5 0 0 1 5-5Z" stroke="#6D28D9" stroke-width="1.4" fill="none"/><circle cx="9" cy="7" r="1.8" fill="#6D28D9"/></svg></div>
+        <h3>Pin a point</h3><p>Drop a precise marker anywhere on the page.</p>
+      </div>
+      <div class="feature">
+        <div class="ic"><svg width="18" height="18" viewBox="0 0 18 18"><path d="M2 12q3-5 5 0t5 0 4-3" stroke="#6D28D9" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg></div>
+        <h3>Freehand ink</h3><p>Sketch directly over the design when words won&rsquo;t do.</p>
+      </div>
+      <div class="feature">
+        <div class="ic"><svg width="18" height="18" viewBox="0 0 18 18"><path d="M9 4v10M4 9h10" stroke="#6D28D9" stroke-width="1.6" stroke-linecap="round"/></svg></div>
+        <h3>Section notes</h3><p>Hover any paragraph for a comment button in the margin.</p>
+      </div>
+      <div class="feature">
+        <div class="ic"><svg width="18" height="18" viewBox="0 0 18 18"><path d="M3 5h12v6H8l-3 3v-3H3z" stroke="#6D28D9" stroke-width="1.5" fill="none" stroke-linejoin="round"/></svg></div>
+        <h3>Threaded replies</h3><p>Discuss each note, then resolve it once it&rsquo;s handled.</p>
+      </div>
+    </div>
+  </section>
 
-  <!-- The library. When testing locally we load the sibling file directly. -->
+  <!-- ===== STATS ===== -->
+  <section class="wide">
+    <div class="stats">
+      <div class="stat-grid">
+        <div class="stat"><div class="n">~40<em>KB</em></div><div class="l">Minified, gzipped</div></div>
+        <div class="stat"><div class="n"><em>0</em></div><div class="l">Dependencies</div></div>
+        <div class="stat"><div class="n"><em>1</em></div><div class="l">Script tag to install</div></div>
+        <div class="stat"><div class="n">100<em>%</em></div><div class="l">Local · nothing leaves</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== USE CASES ===== -->
+  <section id="use-cases" class="wide">
+    <div class="section-head center">
+      <span class="num">02 — WHO IT&rsquo;S FOR</span>
+      <h2>One layer, many reviews</h2>
+      <p>Anywhere people need to point at a page and say &ldquo;this, right here.&rdquo;</p>
+    </div>
+    <div class="cases">
+      <div class="case"><span class="badge">Design</span><h3>Design QA</h3><p>Box misalignments and circle off-brand color before a release ships.</p></div>
+      <div class="case"><span class="badge">Agencies</span><h3>Client feedback</h3><p>Let clients mark up the staging site directly — no Loom, no spreadsheet of bugs.</p></div>
+      <div class="case"><span class="badge">Content</span><h3>Copy editing</h3><p>Editors highlight sentences and leave revisions in context, not in a separate doc.</p></div>
+      <div class="case"><span class="badge">Docs</span><h3>Docs review</h3><p>Readers flag confusing steps right on the published page.</p></div>
+      <div class="case"><span class="badge">QA</span><h3>Bug triage</h3><p>Pin the exact element, attach a note, export the batch to your tracker.</p></div>
+      <div class="case"><span class="badge">Teaching</span><h3>Critique &amp; grading</h3><p>Annotate student work or portfolios with threaded, resolvable comments.</p></div>
+    </div>
+  </section>
+
+  <!-- ===== TESTIMONIALS ===== -->
+  <section class="wide">
+    <div class="section-head center">
+      <span class="num">03 — IN PRACTICE</span>
+      <h2>Reviewers stopped writing &ldquo;the button on the left&rdquo;</h2>
+    </div>
+    <div class="quotes">
+      <div class="quote">
+        <p>&ldquo;We dropped one script tag onto the staging site and our client&rsquo;s
+           feedback went from a 40-line email to pins on the actual page. Game changer.&rdquo;</p>
+        <div class="by"><span class="av" style="background:#6D28D9;">ML</span>
+          <div><div class="nm">Maya Lindqvist</div><div class="ro">Design Lead, Studio Föntän</div></div>
+        </div>
+      </div>
+      <div class="quote">
+        <p>&ldquo;No backend to stand up, nothing to get past security review. It just
+           lives in the browser and exports JSON. Exactly the right amount of tool.&rdquo;</p>
+        <div class="by"><span class="av" style="background:#0EA5A5;">RK</span>
+          <div><div class="nm">Ravi Kapoor</div><div class="ro">Staff Engineer, Northwind</div></div>
+        </div>
+      </div>
+      <div class="quote">
+        <p>&ldquo;Our editors highlight copy straight on the live article. The comments
+           re-anchor even after we restructure the page. I don&rsquo;t know how.&rdquo;</p>
+        <div class="by"><span class="av" style="background:#F43F5E;">TC</span>
+          <div><div class="nm">Tomás Cardoso</div><div class="ro">Managing Editor, The Offcut</div></div>
+        </div>
+      </div>
+      <div class="quote">
+        <p>&ldquo;I teach a web design course and students annotate each other&rsquo;s
+           projects with it. Threaded, resolvable, and totally private to their machine.&rdquo;</p>
+        <div class="by"><span class="av" style="background:#D97706;">AG</span>
+          <div><div class="nm">Aïsha Gueye</div><div class="ro">Instructor, LLM Engineering</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== INSTALL ===== -->
+  <section id="install" class="shell">
+    <div class="section-head center">
+      <span class="num">04 — GET STARTED</span>
+      <h2>One line, and you&rsquo;re reviewing</h2>
+      <p>Drop this in right before <code class="inline">&lt;/body&gt;</code>. No build
+         step, no framework, no signup.</p>
+    </div>
+    <div class="install-card">
+      <div class="bar"><i></i><i></i><i></i></div>
+<pre><span class="tag">&lt;script</span> <span class="attr">src</span>=<span class="str">"https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js"</span> <span class="attr">defer</span><span class="tag">&gt;&lt;/script&gt;</span></pre>
+    </div>
+    <p class="install-foot">~40&nbsp;KB · vanilla JS · zero dependencies · every evergreen browser</p>
+
+    <div class="steps">
+      <div class="step"><span class="marker"></span><h3>Add the script</h3><p>Paste the tag, or self-host the single <code class="inline">annotate.js</code> file.</p></div>
+      <div class="step"><span class="marker"></span><h3>Review the page</h3><p>The toolbar appears bottom-right. Highlight, draw, pin and comment.</p></div>
+      <div class="step"><span class="marker"></span><h3>Share as JSON</h3><p>Export your notes; a teammate imports them, anchored in place.</p></div>
+    </div>
+  </section>
+
+  <!-- ===== FAQ ===== -->
+  <section id="faq" class="shell faq">
+    <div class="section-head center">
+      <span class="num">05 — QUESTIONS</span>
+      <h2>Good things to know</h2>
+    </div>
+    <details open><summary>Where are comments stored?</summary><p>In the reviewer&rsquo;s own browser via <code class="inline">localStorage</code>, namespaced by project and page. Nothing is sent to a server — to share, you export a JSON file and your teammate imports it.</p></details>
+    <details><summary>Will highlights break when I edit the page?</summary><p>Each text annotation stores the exact quote plus a short prefix and suffix. On load it re-finds that text, so notes survive copy edits and layout reflows. If the underlying text is deleted entirely, the comment is kept but shown as &ldquo;orphaned.&rdquo;</p></details>
+    <details><summary>Does it work with my framework?</summary><p>Yes — it&rsquo;s a plain browser script. There are copy-paste recipes for React, Next.js, Vue, Svelte, WordPress, Webflow, Shopify and plain HTML in the README. The rule is the same everywhere: load it once, after the page renders.</p></details>
+    <details><summary>Can I show it only to certain people?</summary><p>Load the script conditionally — e.g. only on a staging domain, or only for logged-in editors. Since it&rsquo;s one tag, you control exactly when and where it appears.</p></details>
+    <details><summary>What does it cost?</summary><p>Nothing. annotate.js is open source under the MIT license, free for personal and commercial use.</p></details>
+  </section>
+
+  <!-- ===== CTA BAND ===== -->
+  <section class="wide">
+    <div class="cta-band">
+      <span class="eyebrow" style="color:rgba(255,255,255,.7); justify-content:center;">Ready in 30 seconds</span>
+      <h2>Put a review layer on your site today</h2>
+      <p>Copy one script tag, reload, and start marking up the live page. No account required.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#install">Copy the snippet</a>
+        <a class="btn btn-ghost" href="https://github.com/reviewjs/annotate" target="_blank" rel="noopener">Read the docs</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== FOOTER ===== -->
+  <footer>
+    <div class="wide">
+      <div class="foot-grid">
+        <div>
+          <a class="wordmark" href="#top" style="font-size:1.3rem;">annotate<span class="dot">.</span>js</a>
+          <p class="foot-blurb">A drop-in visual review &amp; annotation layer for any website. Local-only, zero backend, one script tag.</p>
+        </div>
+        <div>
+          <h4>Product</h4>
+          <a href="#features">Features</a>
+          <a href="#use-cases">Use cases</a>
+          <a href="#install">Install</a>
+          <a href="#faq">FAQ</a>
+        </div>
+        <div>
+          <h4>Resources</h4>
+          <a href="https://github.com/reviewjs/annotate#readme" target="_blank" rel="noopener">Documentation</a>
+          <a href="https://github.com/reviewjs/annotate#framework-integration" target="_blank" rel="noopener">Framework guides</a>
+          <a href="https://github.com/reviewjs/annotate#javascript-api" target="_blank" rel="noopener">JavaScript API</a>
+        </div>
+        <div>
+          <h4>Open source</h4>
+          <a href="https://github.com/reviewjs/annotate" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://www.npmjs.com/package/@reviewjs/annotate" target="_blank" rel="noopener">npm</a>
+          <a href="https://github.com/reviewjs/annotate/issues" target="_blank" rel="noopener">Report an issue</a>
+        </div>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>© 2026 annotate.js · MIT licensed · v1.0.0</span>
+      <span>Built with vanilla JS · no trackers on this page</span>
+    </div>
+  </footer>
+
+  <!-- The library itself, running on this very page. -->
   <script
     src="./annotate.js"
-    data-accent="#6d28d9"
     data-project="annotate-demo"
+    data-accent="#6D28D9"
     defer
   ></script>
 </body>
