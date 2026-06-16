@@ -9,7 +9,7 @@ browser (`localStorage`) and can be **downloaded to / imported from a portable
 JSON file** to share with your team.
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/reviewjs/annotate.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js" defer></script>
 ```
 
 That single line is the whole installation.
@@ -55,16 +55,16 @@ comment (`#an=<id>`), an "off" mode that collapses to a small launcher, and a
 Add this just before `</body>`:
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/reviewjs/annotate.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js" defer></script>
 ```
 
 That's it — reload the page and the toolbar appears in the bottom-right corner.
 
 > **Pin a version** for production stability:
-> `https://cdn.jsdelivr.net/npm/reviewjs@1.0.0/annotate.js`
+> `https://cdn.jsdelivr.net/npm/@reviewjs/annotate@1.0.0/annotate.js`
 >
 > unpkg works too:
-> `https://unpkg.com/reviewjs@1.0.0/annotate.js`
+> `https://unpkg.com/@reviewjs/annotate@1.0.0/annotate.js`
 
 ### 2. Self-hosted
 
@@ -82,7 +82,7 @@ Configure with `data-` attributes on the script tag — all optional:
 
 ```html
 <script
-  src="https://cdn.jsdelivr.net/npm/reviewjs/annotate.js"
+  src="https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js"
   data-project="marketing-site"
   data-accent="#6d28d9"
   data-theme="auto"
@@ -110,7 +110,7 @@ Prefer JS config? Set `window.AnnotateConfig` **before** the script loads:
     theme: "auto",
   };
 </script>
-<script src="https://cdn.jsdelivr.net/npm/reviewjs/annotate.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js" defer></script>
 ```
 
 ---
@@ -135,7 +135,7 @@ export default function Annotate() {
     window.AnnotateConfig = { project: "my-react-app", accent: "#6d28d9" };
     const s = document.createElement("script");
     s.id = "annotate-js";
-    s.src = "https://cdn.jsdelivr.net/npm/reviewjs/annotate.js";
+    s.src = "https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js";
     s.defer = true;
     document.body.appendChild(s);
   }, []);
@@ -168,7 +168,7 @@ export default function RootLayout({ children }) {
       <body>
         {children}
         <Script
-          src="https://cdn.jsdelivr.net/npm/reviewjs/annotate.js"
+          src="https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js"
           strategy="afterInteractive"
         />
       </body>
@@ -189,7 +189,7 @@ onMounted(() => {
   window.AnnotateConfig = { project: "my-vue-app", accent: "#10b981" };
   const s = document.createElement("script");
   s.id = "annotate-js";
-  s.src = "https://cdn.jsdelivr.net/npm/reviewjs/annotate.js";
+  s.src = "https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js";
   s.defer = true;
   document.body.appendChild(s);
 });
@@ -205,7 +205,7 @@ Or, even simpler, add the `<script>` tag straight into `public/index.html`
 or *Insert Headers and Footers*) and paste this into the **footer** box:
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/reviewjs/annotate.js" data-project="my-wp-site" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js" data-project="my-wp-site" defer></script>
 ```
 
 **Option B — theme code.** Add to your theme's `functions.php`:
@@ -214,7 +214,7 @@ or *Insert Headers and Footers*) and paste this into the **footer** box:
 function reviewjs_enqueue() {
   wp_enqueue_script(
     'reviewjs',
-    'https://cdn.jsdelivr.net/npm/reviewjs/annotate.js',
+    'https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js',
     array(),
     '1.0.0',
     true // load in footer
@@ -234,7 +234,7 @@ add_action( 'wp_enqueue_scripts', 'reviewjs_enqueue' );
   import { onMount } from "svelte";
   onMount(() => {
     const s = document.createElement("script");
-    s.src = "https://cdn.jsdelivr.net/npm/reviewjs/annotate.js";
+    s.src = "https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js";
     s.defer = true;
     document.body.appendChild(s);
   });
@@ -249,7 +249,7 @@ In `angular.json`, add to the `"scripts"` array:
 
 ```json
 "scripts": [
-  "https://cdn.jsdelivr.net/npm/reviewjs/annotate.js"
+  "https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js"
 ]
 ```
 
@@ -258,7 +258,7 @@ In `angular.json`, add to the `"scripts"` array:
 Paste before `</body>` (or into the platform's "custom code / footer" field):
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/reviewjs/annotate.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js" defer></script>
 ```
 
 ---
@@ -334,8 +334,8 @@ Annotate.version;             // "1.0.0"
 ## Try it locally
 
 ```bash
-git clone git@github.com:reviewjs/reviewjs.git
-cd reviewjs
+git clone git@github.com:reviewjs/annotate.git
+cd annotate
 npm start          # serves the demo at http://localhost:3000
 ```
 
