@@ -423,7 +423,7 @@ test.describe('Export / Import', () => {
     expect(comments.length).toBe(1);
 
     const payload = JSON.stringify({
-      annotate: '1.0.0',
+      annotate: '1.0.1',
       kind: 'annotate-export',
       page: '/',
       comments: [{
@@ -494,7 +494,7 @@ test.describe('Theme', () => {
 test.describe('Public API (window.Annotate)', () => {
   test('exposes version', async ({ page }) => {
     const version = await page.evaluate(() => window.Annotate.version);
-    expect(version).toBe('1.0.0');
+    expect(version).toBe('1.0.1');
   });
 
   test('open() / close() control the panel', async ({ page }) => {

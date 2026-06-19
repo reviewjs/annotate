@@ -16,7 +16,7 @@ const props = defineProps({
   theme: { type: String, default: "auto" },
   src: {
     type: String,
-    default: "https://cdn.jsdelivr.net/npm/@annotatejs/core/annotate.js",
+    default: "https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js",
   },
 });
 

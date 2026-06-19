@@ -1,6 +1,6 @@
 {
   "name": "@reviewjs/annotate",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A drop-in visual review & annotation layer for any website. Local-only, zero backend. Highlight text, draw shapes, drop pins and leave threaded comments — then download them as JSON.",
   "main": "annotate.js",
   "unpkg": "annotate.js",
@@ -13,6 +13,9 @@
   "scripts": {
     "start": "npx serve . --listen 4200 --no-clipboard",
     "demo": "npx serve . --listen 4200 --no-clipboard",
+    "pages:build": "rm -rf _site && mkdir -p _site && cp index.html annotate.js .nojekyll CNAME LICENSE README.md package.json _site/ && cp -R examples _site/examples",
+    "deploy:pages": "npm run pages:build",
+    "publish:npm": "npm publish --access public",
     "test": "playwright test",
     "test:chromium": "playwright test --project=chromium",
     "test:mobile": "playwright test --project=mobile-chrome --project=mobile-safari",

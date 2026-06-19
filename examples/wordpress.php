@@ -7,7 +7,7 @@
  *  A) No code — install a "header & footer scripts" plugin (WPCode, Insert
  *     Headers and Footers, etc.) and paste this into the FOOTER box:
  *
- *       <script src="https://cdn.jsdelivr.net/npm/@annotatejs/core/annotate.js"
+ *       <script src="https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js"
  *               data-project="my-wp-site" defer></script>
  *
  *  B) Theme code — copy the function below into your (child) theme's
@@ -27,9 +27,9 @@ function annotatejs_enqueue() {
 
 	wp_enqueue_script(
 		'annotatejs',
-		'https://cdn.jsdelivr.net/npm/@annotatejs/core/annotate.js',
+		'https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js',
 		array(),     // no dependencies
-		'1.0.0',     // version (also busts caches)
+		'1.0.1',     // version (also busts caches)
 		true         // load in the footer
 	);
 }

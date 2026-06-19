@@ -34,7 +34,7 @@
   if (window.__ANNOTATE_LOADED__) return;
   window.__ANNOTATE_LOADED__ = true;
 
-  var VERSION = "1.0.0";
+  var VERSION = "1.0.1";
 
   // --------------------------------------------------------------------------
   // CONFIG — resolved from (in priority order) the script tag's data-* attrs,

@@ -11,7 +11,7 @@ export default function Annotate({
   project = "my-react-app",
   accent = "#6d28d9",
   theme = "auto",
-  src = "https://cdn.jsdelivr.net/npm/@annotatejs/core/annotate.js",
+  src = "https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js",
 }) {
   useEffect(() => {
     if (document.getElementById("annotate-js")) return;

@@ -61,10 +61,10 @@ Add this just before `</body>`:
 That's it — reload the page and the toolbar appears in the bottom-right corner.
 
 > **Pin a version** for production stability:
-> `https://cdn.jsdelivr.net/npm/@reviewjs/annotate@1.0.0/annotate.js`
+> `https://cdn.jsdelivr.net/npm/@reviewjs/annotate@1.0.1/annotate.js`
 >
 > unpkg works too:
-> `https://unpkg.com/@reviewjs/annotate@1.0.0/annotate.js`
+> `https://unpkg.com/@reviewjs/annotate@1.0.1/annotate.js`
 
 ### 2. Self-hosted
 
@@ -222,7 +222,7 @@ function reviewjs_enqueue() {
     'reviewjs',
     'https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js',
     array(),
-    '1.0.0',
+    '1.0.1',
     true // load in footer
   );
 }
@@ -300,7 +300,7 @@ Annotate.export();            // trigger the JSON download
 Annotate.import();            // open the file picker
 Annotate.clear();             // delete all comments on this page (local)
 Annotate.toast("Saved!");     // show a toast
-Annotate.version;             // "1.0.0"
+Annotate.version;             // "1.0.1"
 ```
 
 ### Comment shape
