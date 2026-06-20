@@ -6,15 +6,24 @@ const { test, expect } = require('@playwright/test');
 // first time (when no name is stored yet).
 async function setName(page, name = 'Test User') {
   const launch = page.locator('#__an_launch');
+  let clickedLaunch = false;
   if (await launch.isVisible()) {
     await launch.click();
+    clickedLaunch = true;
   }
   const modal = page.locator('#__an_namewrap');
   if (await modal.isVisible()) {
     await modal.locator('input').first().fill(name);
     await modal.locator('button').click();
     await expect(modal).not.toBeVisible();
+    return;
   }
+  if (clickedLaunch) return;
+  const keepOpen = await page.evaluate(() => /^#an=./.test(location.hash));
+  await page.evaluate(value => localStorage.setItem('an-author', value), name);
+  await page.reload();
+  await page.waitForFunction(() => !!window.Annotate);
+  if (!keepOpen) await page.evaluate(() => window.Annotate.close());
 }
 
 // Helper: clear all stored annotations so tests start clean
@@ -677,6 +686,7 @@ test.describe('Deep linking', () => {
 test.describe('Startup bubble & author config', () => {
   // Start from a clean, name-less state so the bubble (not the toolbar) shows.
   test.beforeEach(async ({ page }) => {
+    await page.goto('/examples/collapsed-startup.html');
     await clearStorage(page);
     await page.reload();
   });
@@ -695,6 +705,15 @@ test.describe('Startup bubble & author config', () => {
     }
     await expect(page.locator('#__an_panel')).toHaveClass(/an-open/);
     await expectPanelInViewport(page);
+  });
+
+  test('data-start-open opens the review toolbar without the comments panel', async ({ page }) => {
+    await page.goto('/examples/start-open.html');
+    await clearStorage(page);
+    await page.reload();
+    await expect(page.locator('#__an_launch')).not.toBeVisible();
+    await expect(page.locator('#__an_bar')).toBeVisible();
+    await expect(page.locator('#__an_panel')).not.toHaveClass(/an-open/);
   });
 
   test('review bubble sits in the bottom-right corner', async ({ page }) => {
@@ -781,5 +800,16 @@ test.describe('Startup bubble & author config', () => {
     // closes via Done
     await dlg.locator('button:has-text("Done")').click();
     await expect(page.locator('#__an_sharewrap')).toHaveCount(0);
+  });
+});
+
+test.describe('Landing page startup', () => {
+  test('landing page opens with the review toolbar visible and comments panel closed', async ({ page }) => {
+    await page.goto('/');
+    await clearStorage(page);
+    await page.reload();
+    await expect(page.locator('#__an_launch')).not.toBeVisible();
+    await expect(page.locator('#__an_bar')).toBeVisible();
+    await expect(page.locator('#__an_panel')).not.toHaveClass(/an-open/);
   });
 });
