@@ -13,7 +13,7 @@
   "scripts": {
     "start": "npx serve . --listen 4200 --no-clipboard",
     "demo": "npx serve . --listen 4200 --no-clipboard",
-    "pages:build": "rm -rf _site && mkdir -p _site && cp index.html annotate.js logo.png .nojekyll CNAME LICENSE README.md package.json _site/ && cp -R examples _site/examples",
+    "pages:build": "rm -rf _site && mkdir -p _site && cp index.html annotate.js logo.png og-image.png .nojekyll CNAME LICENSE README.md package.json _site/ && cp -R examples _site/examples",
     "deploy:pages": "npm run pages:build",
     "publish:npm": "npm publish --access public",
     "test": "playwright test",
