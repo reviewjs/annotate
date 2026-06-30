@@ -1,5 +1,6 @@
 # reviewjs
 
+![A Visual screenshot of Annotatejs](./og-image.png)
 **A drop-in visual review & annotation layer for any website.** Highlight text,
 draw rectangles & circles, drop pins, sketch freehand and leave threaded
 comments — directly on top of your live page.
