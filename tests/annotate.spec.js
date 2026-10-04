@@ -1796,3 +1796,203 @@ test.describe('Architectural improvements', () => {
     expect(count2).toBeGreaterThan(count1);
   });
 });
+
+// ============================================================
+// REVIEW-FIX REGRESSIONS (from the codex advisor review of
+// commit 8379d2b). Each test pins one identified defect.
+// ============================================================
+test.describe('Review fixes', () => {
+  test('an unsaved comment survives refresh() while storage is denied', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const orig = Storage.prototype.setItem;
+      Storage.prototype.setItem = function () { throw new DOMException('denied', 'SecurityError'); };
+      try {
+        window.Annotate._annotateCreateForTest({ type: 'note', text: 'unsaved-fresh', color: '#f59e0b' });
+        const before = window.Annotate.comments().some(c => c.text === 'unsaved-fresh');
+        window.Annotate.refresh();
+        const after = window.Annotate.comments().some(c => c.text === 'unsaved-fresh');
+        return { before, after };
+      } finally { Storage.prototype.setItem = orig; }
+    });
+    expect(res.before).toBe(true);
+    // refresh() must not discard work that never reached storage.
+    expect(res.after).toBe(true);
+  });
+
+  test('editing an unsaved comment still applies the change in memory', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const orig = Storage.prototype.setItem;
+      Storage.prototype.setItem = function () { throw new DOMException('denied', 'SecurityError'); };
+      try {
+        const c = window.Annotate._annotateCreateForTest({ type: 'note', text: 'orig', color: '#f59e0b' });
+        const updated = window.Annotate._annotatePatchForTest(c.id, { text: 'edited' });
+        const inState = window.Annotate.comments().some(x => x.id === c.id && x.text === 'edited');
+        return { patchResult: updated ? updated.text : null, inState };
+      } finally { Storage.prototype.setItem = orig; }
+    });
+    // patchComment must not return null just because the record is not in storage.
+    expect(res.patchResult).toBe('edited');
+    expect(res.inState).toBe(true);
+  });
+
+  test('import skips an id that already exists on a different page of the project', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const key = 'annotate:annotate-demo';
+      const mk = (id, pg, text) => ({
+        id, type: 'pin', page: pg, author: 'X', text, color: '#f59e0b',
+        geom: { kind: 'pin', selector: 'body', x: 0.2, y: 0.2 },
+        resolved: false, replies: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      });
+      localStorage.setItem(key, JSON.stringify({ comments: [mk('collide', 'annotate-demo:/other-route', 'on other page')] }));
+      window.Annotate.refresh();
+      window.Annotate._annotateImportForTest({
+        annotate: '1.2.0', kind: 'annotate-export', page: '/',
+        comments: [mk('collide', '/', 'incoming colliding id')],
+      });
+      return window.Annotate.comments().map(c => c.text);
+    });
+    // The same ID already lives on another page of this project — do not import.
+    expect(res).not.toContain('incoming colliding id');
+  });
+
+  test('replies are truncated and thread caps enforced at input time', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const c = window.Annotate._annotateCreateForTest({ type: 'note', text: 'x', color: '#f59e0b' });
+      const longText = 'a'.repeat(6000);
+      const updated = window.Annotate._annotatePatchForTest(c.id, {
+        reply: { id: 'r1', author: 'X', text: longText, createdAt: new Date().toISOString() },
+      });
+      const replyTextLen = updated.replies[0].text.length;
+      // Drive a thread up to the cap and confirm the next reply is refused.
+      let c2 = window.Annotate._annotateCreateForTest({ type: 'note', text: 'capthread', color: '#f59e0b' });
+      for (let i = 0; i < 500; i++) {
+        c2 = window.Annotate._annotatePatchForTest(c2.id, {
+          reply: { id: 'r' + i, author: 'X', text: 'ok', createdAt: new Date().toISOString() },
+        });
+      }
+      const capLen = c2.replies.length;
+      const extra = window.Annotate._annotatePatchForTest(c2.id, {
+        reply: { id: 'r-extra', author: 'X', text: 'should-not-add', createdAt: new Date().toISOString() },
+      });
+      const afterExtra = extra.replies.length;
+      return { replyTextLen, capLen, afterExtra };
+    });
+    expect(res.replyTextLen).toBe(5000);
+    expect(res.capLen).toBe(500);
+    expect(res.afterExtra).toBe(500); // 501st reply refused
+  });
+
+  test('malformed stored records are skipped on load instead of crashing', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const key = 'annotate:annotate-demo';
+      const existing = JSON.parse(localStorage.getItem(key) || '{"comments":[]}');
+      const pageKey = existing.comments[0] ? existing.comments[0].page : 'annotate-demo:/';
+      const good = { id: 'good-1', type: 'pin', page: pageKey, author: 'X', text: 'fine', color: '#f59e0b',
+        geom: { kind: 'pin', selector: 'body', x: 0.5, y: 0.5 }, resolved: false, replies: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      localStorage.setItem(key, JSON.stringify({ comments: [
+        null,
+        good,
+        { id: 'bad-geom', type: 'pin', page: pageKey, author: 'X', text: 'x', color: '#f59e0b',
+          geom: { kind: 'pin', selector: 'body', x: null, y: null }, resolved: false, replies: [],
+          createdAt: '', updatedAt: '' },
+        { id: 'bad-type-geom', type: 'shape', page: pageKey, author: 'X', text: 'y', color: '#f59e0b',
+          geom: { kind: 'pin', selector: 'body', x: 0.5, y: 0.5 }, resolved: false, replies: [],
+          createdAt: '', updatedAt: '' },
+      ] }));
+      let threw = null;
+      try { window.Annotate.refresh(); } catch (e) { threw = e && e.name; }
+      const texts = window.Annotate.comments().map(c => c.text);
+      return { threw, texts };
+    });
+    expect(res.threw).toBe(null);
+    expect(res.texts).toContain('fine');
+    expect(res.texts).not.toContain('x');
+    expect(res.texts).not.toContain('y');
+  });
+
+  test('a storage sync event does not switch page identity before refresh()', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const c = window.Annotate._annotateCreateForTest({ type: 'note', text: 'routepin', color: '#f59e0b' });
+      history.pushState({}, '', '/other-route');
+      const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
+      window.dispatchEvent(new StorageEvent('storage', { key, newValue: localStorage.getItem(key), storageArea: localStorage }));
+      return window.Annotate.comments().map(x => x.text);
+    });
+    // The comment belongs to the original route; a sync load must not switch PAGE.
+    expect(res).toContain('routepin');
+  });
+
+  test('overlapping occurrences are counted individually', async ({ page }) => {
+    // "ana" occurs twice inside "banana" (index 1 and index 3). Advancing the
+    // scan by the needle length used to miss the second, overlapping hit.
+    const n = await page.evaluate(() => window.Annotate._annotateCountOccurrencesForTest('banana', 'ana'));
+    expect(n).toBe(2);
+  });
+
+  test('activating undo twice does not duplicate the comment', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const c = window.Annotate._annotateCreateForTest({ type: 'note', text: 'doomed', color: '#f59e0b' });
+      const card = document.querySelector('[data-id="' + c.id + '"]');
+      card.querySelector('.an-mini.an-danger').click();
+      const undoBtn = document.querySelector('.an-taction');
+      undoBtn.click();
+      undoBtn.click(); // double activation in the same tick
+      const inMemory = window.Annotate.comments().filter(x => x.id === c.id).length;
+      const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
+      const inStorage = JSON.parse(localStorage.getItem(key) || '{"comments":[]}').comments.filter(x => x.id === c.id).length;
+      return { inMemory, inStorage };
+    });
+    expect(res.inMemory).toBe(1);
+    expect(res.inStorage).toBeLessThanOrEqual(1);
+  });
+
+  test('highlight marks are keyboard-operable (role=button, tabindex=0)', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const p = document.createElement('p');
+      p.textContent = 'a uniquely quotable phrase for keyboard testing';
+      document.body.appendChild(p);
+      const c = window.Annotate._annotateCreateForTest({
+        type: 'highlight', color: '#f59e0b', text: 'kbd',
+        anchor: { prefix: '', exact: 'uniquely quotable phrase for keyboard testing', suffix: '' },
+      });
+      const mark = document.querySelector('mark.an-mark[data-an="' + c.id + '"]');
+      return { role: mark && mark.getAttribute('role'), tabindex: mark && mark.getAttribute('tabindex') };
+    });
+    expect(res.role).toBe('button');
+    expect(res.tabindex).toBe('0');
+  });
+
+  test('stored highlight with a null anchor is skipped without crashing', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const key = 'annotate:annotate-demo';
+      const good = { id: 'h-good', page: 'annotate-demo:/', type: 'note', author: 'X', text: 'ok', color: '#f59e0b', resolved: false, replies: [], createdAt: '', updatedAt: '' };
+      localStorage.setItem(key, JSON.stringify({ comments: [
+        { id: 'h-null', page: 'annotate-demo:/', type: 'highlight', author: 'X', text: 'x', color: '#f59e0b', anchor: null, resolved: false, replies: [], createdAt: '', updatedAt: '' },
+        good,
+      ] }));
+      let threw = null;
+      try { window.Annotate.refresh(); } catch (e) { threw = e && e.name; }
+      return { threw, texts: window.Annotate.comments().map(c => c.text) };
+    });
+    expect(res.threw).toBe(null);
+    expect(res.texts).toEqual(['ok']);
+  });
+
+  test('clear() also removes comments created while storage was denied', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const orig = Storage.prototype.setItem;
+      Storage.prototype.setItem = function () { throw new DOMException('denied', 'SecurityError'); };
+      try {
+        window.Annotate._annotateCreateForTest({ type: 'note', text: 'unsaved-clear', color: '#f59e0b' });
+        const had = window.Annotate.comments().some(c => c.text === 'unsaved-clear');
+        window.Annotate.clear();
+        const after = window.Annotate.comments().some(c => c.text === 'unsaved-clear');
+        return { had, after };
+      } finally { Storage.prototype.setItem = orig; }
+    });
+    expect(res.had).toBe(true);
+    expect(res.after).toBe(false);
+  });
+});

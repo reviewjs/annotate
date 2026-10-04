@@ -201,8 +201,34 @@
     }
     return "c" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
   }
+  // Comment / reply size caps — enforced BOTH when accepting input and when
+  // validating imports, so the app can never export something it would later
+  // reject. Kept as named constants so the two stay in lock-step.
+  var MAX_COMMENT_TEXT = 5000;
+  var MAX_REPLY_TEXT = 5000;
+  var MAX_REPLIES = 500;
+
+  // In-memory store of comments whose last write was refused by localStorage
+  // (private mode, quota…). They stay visible, editable and exportable even
+  // though they are not persisted; pageComments() overlays them back in.
+  var unsaved = {};
+
   function pageComments() {
-    return dbRead().comments.filter(function (c) { return c.page === PAGE; });
+    // Validate stored records before touching properties: a corrupt/legacy
+    // entry (e.g. [null]) must be skipped rather than crash rendering.
+    var listed = dbRead().comments.filter(function (c) {
+      return isValidComment(c) && c.page === PAGE;
+    });
+    // Reoverlay unsaved records for this page onto the persisted list (upsert
+    // by id) so work that never reached storage is not lost on reload.
+    Object.keys(unsaved).forEach(function (id) {
+      var u = unsaved[id];
+      if (!u || u.page !== PAGE) return;
+      var idx = -1;
+      for (var i = 0; i < listed.length; i++) if (listed[i].id === id) { idx = i; break; }
+      if (idx >= 0) listed[idx] = u; else listed.push(u);
+    });
+    return listed;
   }
   function createComment(draft) {
     var d = dbRead(), now = new Date().toISOString();
@@ -212,7 +238,7 @@
       url: location.href,
       type: draft.type || "note",
       author: state.author || "Anonymous",
-      text: String(draft.text || "").slice(0, 5000),
+      text: String(draft.text || "").slice(0, MAX_COMMENT_TEXT),
       color: draft.color || state.color,
       anchor: draft.anchor || null,
       geom: draft.geom || null,
@@ -222,36 +248,54 @@
       updatedAt: now,
     };
     d.comments.push(c);
-    dbWrite(d); // surfaces the banner if the write was refused; the caller
+    var ok = dbWrite(d); // surfaces the banner if the write was refused; the caller
                 // keeps the comment in state so it stays visible & exportable
+    if (!ok) unsaved[c.id] = c; // keep it so edits/reloads don't lose it
     return c;
   }
   function patchComment(id, changes) {
     var d = dbRead();
     var c = d.comments.filter(function (x) { return x.id === id; })[0];
-    if (!c) return null;
-    if (typeof changes.text === "string") c.text = changes.text.slice(0, 5000);
+    var fromUnsaved = false;
+    if (!c) {
+      // A comment created while storage was unavailable never reached the
+      // persisted list; fall back to our in-memory copy so it stays editable.
+      if (unsaved[id]) { c = unsaved[id]; fromUnsaved = true; } else return null;
+    }
+    if (typeof changes.text === "string") c.text = changes.text.slice(0, MAX_COMMENT_TEXT);
     if (typeof changes.resolved === "boolean") c.resolved = changes.resolved;
     if (typeof changes.color === "string") c.color = changes.color;
-    if (changes.reply) c.replies.push(changes.reply);
+    if (changes.reply) {
+      changes.reply.text = String(changes.reply.text || "").slice(0, MAX_REPLY_TEXT);
+      // Enforce the thread cap at input too — a comment can never grow beyond
+      // the number imports will accept, so native exports always round-trip.
+      if (c.replies.length < MAX_REPLIES) c.replies.push(changes.reply);
+    }
     if (changes.editReply) {
       var ri = c.replies.findIndex(function (r) { return r.id === changes.editReply.id; });
-      if (ri >= 0) { c.replies[ri] = Object.assign({}, c.replies[ri], { text: changes.editReply.text }); }
+      if (ri >= 0) c.replies[ri] = Object.assign({}, c.replies[ri],
+        { text: String(changes.editReply.text || "").slice(0, MAX_REPLY_TEXT) });
     }
     if (changes.deleteReply) {
       c.replies = c.replies.filter(function (r) { return r.id !== changes.deleteReply; });
     }
     c.updatedAt = new Date().toISOString();
+    if (fromUnsaved) d.comments.push(c); // stage so the write can persist it
     if (!dbWrite(d)) {
-      // Mirror the change in memory so the UI stays consistent with what the
-      // user just did, even though it did not reach storage.
+      // Keep the (updated) in-memory copy authoritative and mirror it into the
+      // live list so the UI reflects what the user just did — even though the
+      // change did not reach storage.
+      unsaved[id] = c;
       var live = state.comments.filter(function (x) { return x.id === id; })[0];
       if (live) mergeComment(c);
       renderAll(); renderPanel();
+    } else {
+      delete unsaved[id];
     }
     return c;
   }
   function removeComment(id) {
+    delete unsaved[id]; // it must not linger in the recoverable memory set
     var d = dbRead();
     d.comments = d.comments.filter(function (c) { return c.id !== id; });
     dbWrite(d);
@@ -849,7 +893,9 @@
     if (opts.action) {
       var btn = el("button", { class: "an-taction", text: opts.action });
       btn.addEventListener("click", function () {
-        if (expired) return;
+        // Guard on `acted` too: a rapid second click within the removal window
+        // (220ms) must not re-run onAction (e.g. restoring a comment twice).
+        if (acted || expired) return;
         acted = true;
         clearTimeout(timer);
         t.classList.add("an-out");
@@ -1024,13 +1070,49 @@
       if (c.resolved && !showResolvedVisuals()) continue;
       if (c.type === "highlight" || !c.geom || !c.geom.selector) continue; // marks reflow with the DOM
       var ae = resolveAnchorEl(c.geom.selector);
-      if (!ae) continue;
+      var wasAnchored = !!anchorCache[c.id];
+      if (!ae) {
+        // present -> missing is a move: the last render drew in place, so a
+        // re-render must now replace it with the missing-anchor badge instead
+        // of leaving the old marker visible.
+        if (wasAnchored) return true;
+        continue;
+      }
       var prev = anchorCache[c.id];
       var b = docBox(ae);
       if (!prev || Math.abs(prev.x - b.x) > 0.5 || Math.abs(prev.y - b.y) > 0.5 ||
         Math.abs(prev.w - b.w) > 0.5 || Math.abs(prev.h - b.h) > 0.5) return true;
     }
     return false;
+  }
+
+  // Observe each resolved anchor element directly (in addition to <body>), so
+  // an anchor that moves without changing <body>'s box still re-renders.
+  var _anchorRO = null;
+  var observedAnchors = {}; // comment id -> element currently observed
+  function observeAnchors() {
+    if (!_anchorRO) return;
+    var current = {}; // comment id -> live anchor element now
+    for (var i = 0; i < state.comments.length; i++) {
+      var c = state.comments[i];
+      if (!c.geom || !c.geom.selector || c.type === "highlight") continue;
+      var ae = resolveAnchorEl(c.geom.selector);
+      if (ae) current[c.id] = ae;
+    }
+    // Unobserve any anchor that is no longer the live one for its comment, so
+    // SPA-removed subtrees aren't retained through strong ResizeObserver refs.
+    for (var id in observedAnchors) {
+      if (observedAnchors[id] !== current[id]) {
+        try { _anchorRO.unobserve(observedAnchors[id]); } catch (e) {}
+        delete observedAnchors[id];
+      }
+    }
+    for (var nid in current) {
+      if (!observedAnchors[nid]) {
+        observedAnchors[nid] = current[nid];
+        try { _anchorRO.observe(current[nid]); } catch (e2) {}
+      }
+    }
   }
 
   function showResolvedVisuals() { return state.filter !== "open"; }
@@ -1049,13 +1131,19 @@
     });
   }
 
-  // Count full occurrences of a needle in the page text.
+  // Count full occurrences of a needle in the page text. Overlapping matches
+  // each count (advancing by one, not by the needle length, so e.g. "ana"
+  // inside "banana" is counted twice rather than once).
+  function countOccurrences(full, needle) {
+    if (!needle) return 0;
+    var count = 0, at = 0;
+    while ((at = full.indexOf(needle, at)) >= 0) { count++; if (count > 1) return count; at += 1; }
+    return count;
+  }
   function countMatches(needle) {
     var nodes = getTextNodes(), full = "";
     for (var i = 0; i < nodes.length; i++) full += nodes[i].nodeValue;
-    var count = 0, at = 0;
-    while (needle && (at = full.indexOf(needle, at)) >= 0) { count++; at += needle.length; }
-    return count;
+    return countOccurrences(full, needle);
   }
 
   // Decide whether a saved quote can be highlighted honestly:
@@ -1083,6 +1171,7 @@
     pill.style.left = "16px";
     pill.style.pointerEvents = "auto";
     pill.addEventListener("click", function (ev) { ev.stopPropagation(); focusComment(c.id, true); });
+    makeMarkerInteractive(pill, c, idx, "Unanchored note");
     pinLayer.appendChild(pill);
   }
 
@@ -1113,6 +1202,7 @@
             m.addEventListener("click", function (ev) {
               ev.stopPropagation(); focusComment(c.id, true);
             });
+            makeMarkerInteractive(m, c, state.comments.indexOf(c) + 1, "Highlight");
             if (c.id === state.activeId) m.classList.add("an-active");
           });
         }
@@ -1126,6 +1216,7 @@
         renderBlock(c);
       }
     });
+    observeAnchors();
     updateCount();
   }
 
@@ -1689,7 +1780,7 @@
     window.addEventListener("resize", function () { clearTimeout(rt); rt = setTimeout(renderAll, 150); });
     // Keep tabs in sync: reload annotations when another tab writes to storage
     window.addEventListener("storage", function (e) {
-      if (e.key === STORE_KEY) load();
+      if (e.key === STORE_KEY) loadData();
     });
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { setTimeout(renderAll, 60); });
     window.addEventListener("load", function () { setTimeout(renderAll, 120); });
@@ -1709,6 +1800,7 @@
         if (_roRaf) return;
         _roRaf = requestAnimationFrame(function () { _roRaf = 0; relayout(); });
       });
+      _anchorRO = _ro;
       _ro.observe(document.body);
       // capture:true so scrolls inside nested scrollable containers count too
       document.addEventListener("scroll", function () {
@@ -2029,7 +2121,16 @@
         if (!rin.value.trim()) return;
         var reply = { id: uid(), author: state.author || "Anonymous", text: rin.value.trim(), createdAt: new Date().toISOString() };
         var updated = patchComment(c.id, { reply: reply });
-        if (updated) { rin.value = ""; mergeComment(updated); renderPanel(); }
+        if (!updated) return;
+        // patchComment refuses the reply once the thread hits MAX_REPLIES but
+        // still returns the (unchanged) comment. Detect that so we don't discard
+        // the user's draft or pretend the reply was saved.
+        var added = updated.replies.some(function (r) { return r.id === reply.id; });
+        if (!added) {
+          toast("This thread has reached its reply limit.", { kind: "error" });
+          return;
+        }
+        rin.value = ""; mergeComment(updated); renderPanel();
       }
       rsend.addEventListener("click", function (e) { e.stopPropagation(); submitReply(); });
       rin.addEventListener("keydown", function (e) {
@@ -2160,8 +2261,12 @@
   function isFiniteNum(v) { return typeof v === "number" && isFinite(v); }
   function isValidGeom(g) {
     if (!g || typeof g !== "object" || typeof g.kind !== "string") return false;
-    if (g.kind === "pin" || g.kind === "rect" || g.kind === "circle")
-      return isFiniteNum(g.x) && isFiniteNum(g.y) && (g.w === undefined || isFiniteNum(g.w)) && (g.h === undefined || isFiniteNum(g.h));
+    if (g.kind === "pin")
+      return isFiniteNum(g.x) && isFiniteNum(g.y);
+    // Rect/circle are positioned and sized relative to their anchor element;
+    // both dimensions must be finite numbers or rendering would produce NaN.
+    if (g.kind === "rect" || g.kind === "circle")
+      return isFiniteNum(g.x) && isFiniteNum(g.y) && isFiniteNum(g.w) && isFiniteNum(g.h);
     if (g.kind === "pen")
       return Array.isArray(g.points) && g.points.length >= 2 && g.points.length <= 10000 &&
         g.points.every(function (p) { return Array.isArray(p) && p.length === 2 && isFiniteNum(p[0]) && isFiniteNum(p[1]); });
@@ -2169,28 +2274,44 @@
     return false; // unknown geometry kinds are rejected, not guessed at
   }
   var VALID_TYPES = { highlight: 1, shape: 1, pin: 1, pen: 1, note: 1, block: 1 };
+  // Which geometry kinds each comment type may carry. A "shape" is a rect or
+  // circle; a "pin" carries a pin geometry — never allow a mismatched pairing.
+  var GEOM_KINDS = { shape: { rect: 1, circle: 1 }, pin: { pin: 1 }, pen: { pen: 1 }, block: { block: 1 } };
+  function geomMatchesType(type, g) {
+    if (type === "highlight" || type === "note") return g === null || g === undefined;
+    var kinds = GEOM_KINDS[type];
+    return !!(g && kinds && g.kind && kinds[g.kind] === 1);
+  }
   function isValidAnchor(a) {
+    if (!a || typeof a !== "object") return false;
     if (typeof a.exact !== "string") return false;
-    if (a.exact.length > 10000) return false;
+    // Generous guard against absurd/bogus quotes — far above any realistic
+    // native highlight, so a legitimately created highlight is never hidden
+    // when validating stored records on load.
+    if (a.exact.length > 1000000) return false;
     return (typeof a.prefix === "string") && (typeof a.suffix === "string");
   }
   function isValidReply(r) {
     return r && typeof r.id === "string" && r.id.length < 128 &&
-      typeof r.author === "string" && typeof r.text === "string" && r.text.length <= 5000 &&
+      typeof r.author === "string" && typeof r.text === "string" && r.text.length <= MAX_REPLY_TEXT &&
       typeof r.createdAt === "string";
   }
   function isValidType(t) { return typeof t === "string" && VALID_TYPES[t] === 1; }
   // Single schema gate for anything read back from storage or imported from a
-  // file. Returns true for well-formed records only.
+  // file. Returns true for well-formed records only. Limits here are kept in
+  // lock-step with what input accepts (MAX_COMMENT_TEXT / MAX_REPLIES), so the
+  // app can never export a record this gate would reject.
   function isValidComment(c) {
     if (!c || typeof c !== "object") return false;
     if (typeof c.id !== "string" || !c.id || c.id.length > 128) return false;
     if (!isValidType(c.type)) return false;
-    if (typeof c.author !== "string" || typeof c.text !== "string" || c.text.length > 5000) return false;
+    if (typeof c.author !== "string" || typeof c.text !== "string" || c.text.length > MAX_COMMENT_TEXT) return false;
     if (typeof c.color !== "string") return false;
     if (c.anchor !== null && c.anchor !== undefined && !isValidAnchor(c.anchor)) return false;
+    if (c.type === "highlight" && !isValidAnchor(c.anchor)) return false;
+    if (!geomMatchesType(c.type, c.geom)) return false;
     if (c.geom !== null && c.geom !== undefined && !isValidGeom(c.geom)) return false;
-    if (!Array.isArray(c.replies) || c.replies.length > 500 ||
+    if (!Array.isArray(c.replies) || c.replies.length > MAX_REPLIES ||
         !c.replies.every(isValidReply)) return false;
     return true;
   }
@@ -2203,13 +2324,17 @@
     // Warn if the export came from a different page
     if (data.page && data.page !== PAGE)
       toast("These comments were from a different page — positions may not match.", { kind: "info", duration: 6000 });
-    var existing = {};
-    state.comments.forEach(function (c) { existing[c.id] = true; });
+    // Existing IDs span the WHOLE project (all pages), not just the current
+    // route — so importing one page's export onto another page cannot create
+    // colliding ids that allow cross-page edits/deletes.
+    var exists = Object.create(null);
+    dbRead().comments.forEach(function (x) { if (x && typeof x.id === "string") exists[x.id] = true; });
+    Object.keys(unsaved).forEach(function (id) { exists[id] = true; });
     var prepared = [], skipped = 0, seenIds = {};
     incoming.forEach(function (c) {
       if (!isValidComment(c)) { skipped++; return; }        // malformed record — drop
       if (seenIds[c.id]) { skipped++; return; }            // duplicate ID within the batch
-      if (existing[c.id]) { skipped++; return; }           // already imported to this project
+      if (exists[c.id]) { skipped++; return; }             // already imported to this project (any page)
       seenIds[c.id] = true;
       var copy = JSON.parse(JSON.stringify(c));
       copy.page = PAGE;
@@ -2221,8 +2346,12 @@
     }
     var d = dbRead();
     d.comments = d.comments.concat(prepared);
-    dbWrite(d);
-    load();
+    if (!dbWrite(d)) {
+      // The write was refused: keep the imported records in memory so they
+      // stay visible/exportable, and surface the unsaved banner.
+      prepared.forEach(function (c) { unsaved[c.id] = c; });
+    }
+    loadData();
     var ok = prepared.length + (skipped ? " (" + skipped + " skipped)" : "");
     toast("Imported " + ok + " comment" + (prepared.length === 1 ? "" : "s"), { kind: "success" });
   }
@@ -2247,6 +2376,9 @@
     toast("Comment deleted", {
       kind: "info", action: "Undo", duration: 5000,
       onAction: function () {
+        // Idempotent: only the first activation of Undo restores. A second
+        // click (or a stale activation) must no-op instead of re-inserting.
+        if (!pendingDeletes[c.id]) return;
         delete pendingDeletes[c.id];
         var restored = Object.assign({}, c, { replies: (c.replies || []).slice() });
         // Only re-show the comment if we're still on the page it belongs to;
@@ -2469,22 +2601,30 @@
       }
       if (targetY != null) window.scrollTo({ top: Math.max(0, targetY), behavior: "smooth" });
     }
+    if (scrollToContent) {
+      // Keyboard activation (Enter/Space on a marker) should land focus inside
+      // the opened comment, not leave it dangling on the page.
+      var fc = listEl.querySelector('[data-id="' + id + '"]');
+      if (fc) { fc.setAttribute("tabindex", "-1"); fc.focus({ preventScroll: true }); }
+    }
   }
 
   // ==========================================================================
   // BOOT
   // ==========================================================================
   var firstLoad = true;
-  function load() {
-    // SPA navigation: when the host pushes a new route and calls refresh(),
-    // recompute a non-explicit page key so each route keeps its own comments.
-    // An in-flight draft from the previous page is discarded.
+  // Route identity changes ONLY here — during boot or an explicit public
+  // refresh(). Internal reloads (storage sync, import, clear) must not switch
+  // PAGE mid-route, or they'd discard the current route's drafts/comments.
+  function syncPageKey() {
     var newKey = currentPageKey();
     if (newKey !== PAGE) {
       if (pendingDraft || drawing) { drawing = null; cancelDraft(); }
       PAGE = newKey;
       state.activeId = null;
     }
+  }
+  function loadData() {
     if (pendingDraft || drawing) return;
     state.comments = pageComments().filter(function (c) { return !pendingDeletes[c.id]; });
     renderAll();
@@ -2498,6 +2638,10 @@
           setTimeout(function () { focusComment(target, false); }, 150);
       }
     }
+  }
+  function load() {
+    syncPageKey();
+    loadData();
   }
 
   function boot() {
@@ -2542,6 +2686,8 @@
     // Test / automation hooks (not part of the documented API)
     _annotateImportForTest: function (data) { importComments(data); },
     _annotateOpenImportForTest: function () { pickImportFile(); },
+    _annotatePatchForTest: function (id, changes) { return patchComment(id, changes); },
+    _annotateCountOccurrencesForTest: function (full, needle) { return countOccurrences(full, needle); },
     _annotateCreateForTest: function (draft) {
       var c = createComment(draft);
       state.comments.push(c);
@@ -2552,8 +2698,11 @@
     clear: function () {
       var d = dbRead();
       d.comments = d.comments.filter(function (c) { return c.page !== PAGE; });
+      Object.keys(unsaved).forEach(function (id) {
+        if (unsaved[id] && unsaved[id].page === PAGE) delete unsaved[id];
+      });
       dbWrite(d);
-      load();
+      loadData();
     },
   };
 
