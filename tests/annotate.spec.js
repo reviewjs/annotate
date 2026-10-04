@@ -415,6 +415,171 @@ test.describe('Comment actions', () => {
     await expect(page.locator('.an-card')).toHaveCount(1);
   });
 
+  test('deletion persists to storage immediately (before the undo toast expires)', async ({ page }) => {
+    // Regression: deletion used to be deferred until the undo toast expired,
+    // so reloading within that window resurrected the "deleted" comment.
+    // Seed exactly one comment via storage (deterministic, avoids click-to-pin flake).
+    await page.evaluate(() => {
+      const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
+      const stored = { comments: [{
+        id: 'doomed-1', type: 'note', author: 'Test', text: 'Doomed comment',
+        color: '#f59e0b', page: 'annotate-demo:/',
+        resolved: false, replies: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }]};
+      localStorage.setItem(key, JSON.stringify(stored));
+      window.Annotate.refresh();
+    });
+    await expect(page.locator('.an-card')).toHaveCount(1);
+
+    await page.locator('.an-card').hover();
+    await page.locator('.an-card [title="Delete"]').click();
+    await expect(page.locator('.an-card')).toHaveCount(0);
+
+    // Storage must no longer contain the comment immediately — a reload in the
+    // undo window must not resurrect it.
+    const remaining = await page.evaluate(() => window.Annotate.comments().length);
+    expect(remaining).toBe(0);
+    const storedCount = await page.evaluate(() => {
+      const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
+      return JSON.parse(localStorage.getItem(key) || '{"comments":[]}').comments.length;
+    });
+    expect(storedCount).toBe(0);
+
+    // Undo restores the record in both storage and the panel.
+    const toast = page.locator('.an-toast', { hasText: 'deleted' });
+    await expect(toast).toBeVisible();
+    await toast.locator('.an-taction', { hasText: 'Undo' }).click();
+    await expect(page.locator('.an-card')).toHaveCount(1);
+    const restoredStored = await page.evaluate(() => {
+      const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
+      return JSON.parse(localStorage.getItem(key) || '{"comments":[]}').comments.length;
+    });
+    expect(restoredStored).toBe(1);
+  });
+
+  test('undo does not duplicate a comment if its id was re-added to storage during the window', async ({ page }) => {
+    // Delete the comment, then (as a cross-tab sync or re-import would) write
+    // the same id back into storage before Undo is pressed. Undo must restore
+    // the record in the panel but must not append a second copy to storage.
+    await page.evaluate(() => {
+      const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
+      localStorage.setItem(key, JSON.stringify({ comments: [{
+        id: 'reappear-1', type: 'note', author: 'Test', text: 'Come back',
+        color: '#f59e0b', page: 'annotate-demo:/',
+        resolved: false, replies: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }] }));
+      window.Annotate.refresh();
+    });
+    await expect(page.locator('.an-card')).toHaveCount(1);
+    await page.locator('.an-card').hover();
+    await page.locator('.an-card [title="Delete"]').click();
+    await expect(page.locator('.an-card')).toHaveCount(0);
+
+    // Simulate the id reappearing in storage during the undo window.
+    await page.evaluate(() => {
+      const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
+      const stored = JSON.parse(localStorage.getItem(key));
+      stored.comments.push({
+        id: 'reappear-1', type: 'note', author: 'Test', text: 'Come back',
+        color: '#f59e0b', page: 'annotate-demo:/',
+        resolved: false, replies: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      });
+      localStorage.setItem(key, JSON.stringify(stored));
+    });
+
+    const toast = page.locator('.an-toast', { hasText: 'deleted' });
+    await toast.locator('.an-taction', { hasText: 'Undo' }).click();
+    const stored = await page.evaluate(() => {
+      const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
+      return JSON.parse(localStorage.getItem(key)).comments.filter(c => c.id === 'reappear-1').length;
+    });
+    expect(stored).toBe(1);
+  });
+
+  test('undo after navigating to another route does not inject the old route\'s comment', async ({ page }) => {
+    // Delete on route A, navigate to route B, then hit Undo: the comment is
+    // restored to storage but must not appear in route B's live list.
+    await page.evaluate(() => {
+      const key = 'annotate:annotate-demo';
+      localStorage.setItem(key, JSON.stringify({ comments: [{
+        id: 'routeA-1', type: 'note', author: 'T', text: 'from route A',
+        color: '#f59e0b', page: 'annotate-demo:/',
+        resolved: false, replies: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }] }));
+      window.Annotate.refresh();
+    });
+    await page.locator('.an-card').hover();
+    await page.locator('.an-card [title="Delete"]').click();
+    await expect(page.locator('.an-card')).toHaveCount(0);
+    const toast = page.locator('.an-toast', { hasText: 'deleted' });
+    await expect(toast).toBeVisible();
+
+    // Navigate to a different route and refresh — route A is no longer shown.
+    await page.evaluate(() => { history.pushState({}, '', '/route-b'); window.Annotate.refresh(); });
+    expect(await page.evaluate(() => window.Annotate.comments().length)).toBe(0);
+
+    // Undo is still pending; clicking it must restore to storage only.
+    await toast.locator('.an-taction', { hasText: 'Undo' }).click();
+    const state = await page.evaluate(() => ({
+      live: window.Annotate.comments().length,
+      liveIds: window.Annotate.comments().map((c) => c.id),
+      stored: JSON.parse(localStorage.getItem('annotate:annotate-demo')).comments
+        .map((c) => c.id),
+    }));
+    expect(state.live).toBe(0);
+    expect(state.liveIds).not.toContain('routeA-1');
+    expect(state.stored).toContain('routeA-1');
+  });
+
+  test('undo never duplicates a record that is already in storage', async ({ page }) => {
+    // Simulate the record still present in storage (e.g. the delete write
+    // failed, or another tab restored it) before Undo runs.
+    await page.evaluate(() => {
+      const key = 'annotate:annotate-demo';
+      localStorage.setItem(key, JSON.stringify({ comments: [] }));
+      window.Annotate.refresh();
+      window.Annotate._annotateCreateForTest({ type: 'note', text: 'dup check', color: '#f59e0b' });
+    });
+    expect(await page.evaluate(() => window.Annotate.comments().length)).toBe(1);
+    // Force the storage record to survive: delete only from the live state via
+    // the UI, then restore the storage copy before undo (as a failed write
+    // would have left it).
+    const id = await page.evaluate(() => window.Annotate.comments()[0].id);
+    await page.locator('.an-card').hover();
+    await page.locator('.an-card [title="Delete"]').click();
+    await expect(page.locator('.an-card')).toHaveCount(0);
+    await page.evaluate((id) => {
+      const key = 'annotate:annotate-demo';
+      const fresh = JSON.parse(localStorage.getItem(key));
+      if (!fresh.comments.some((c) => c.id === id)) {
+        // Re-create an equivalent record with the same id to model the
+        // "delete write failed, so the record is still in storage" case.
+        fresh.comments.push({
+          id, type: 'note', author: 'Test', text: 'dup check', color: '#f59e0b',
+          page: 'annotate-demo:/', resolved: false, replies: [],
+          createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        });
+        localStorage.setItem(key, JSON.stringify(fresh));
+      }
+    }, id);
+    const toast = page.locator('.an-toast', { hasText: 'deleted' });
+    await toast.locator('.an-taction', { hasText: 'Undo' }).click();
+    const counts = await page.evaluate((id) => {
+      const key = 'annotate:annotate-demo';
+      const stored = JSON.parse(localStorage.getItem(key)).comments;
+      return {
+        storedDup: stored.filter((c) => c.id === id).length,
+        liveDup: window.Annotate.comments().filter((c) => c.id === id).length,
+      };
+    }, id);
+    expect(counts.storedDup).toBe(1);
+    expect(counts.liveDup).toBeLessThanOrEqual(1);
+  });
+
   test('edit comment text', async ({ page }) => {
     const card = page.locator('.an-card').first();
     await card.hover();
@@ -551,68 +716,260 @@ test.describe('Export / Import', () => {
     expect(typeof json.exportedViewport.dpr).toBe('number');
   });
 
-  test('importing from a different page shows a mismatch toast', async ({ page }) => {
+  test('importing from a different page shows a mismatch toast and still imports', async ({ page }) => {
     await page.evaluate(() => {
       window.Annotate.clear();
-      const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
-      const data = {
-        annotate: '1.0.1',
-        kind: 'annotate-export',
-        page: '/some-other-page',
-        url: 'http://example.com/some-other-page',
+    });
+    const before = await page.evaluate(() => window.Annotate.comments().length);
+    await page.evaluate(() => {
+      window.Annotate._annotateImportForTest({
+        annotate: '1.2.0', kind: 'annotate-export', page: '/some-other-page',
         comments: [{
           id: 'mismatch-1', type: 'pin', author: 'Tester', text: 'From elsewhere',
           color: '#f59e0b', geom: { kind: 'pin', selector: 'body', x: 0.5, y: 0.5 },
-          resolved: false, replies: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+          resolved: false, replies: [],
+          createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
         }],
-      };
-      // Trigger importComments via internal path
-      const storeKey = key || ('annotate:' + (location.host || 'default'));
-      const stored = JSON.parse(localStorage.getItem(storeKey) || '{"comments":[]}');
-      const c = JSON.parse(JSON.stringify(data.comments[0]));
-      c.page = window.__ANNOTATE_PAGE__ || '/';
-      stored.comments.push(c);
-      localStorage.setItem(storeKey, JSON.stringify(stored));
-      // Invoke the importComments path through the public import event
-      // by directly calling the exposed internal (indirectly via a crafted object)
+      });
     });
-    // Instead test it end-to-end: the toast appears when page key differs
-    // We call import via the internal function by simulating a file (evaluate)
-    await page.evaluate(() => {
-      // Simulate what importComments does when page key differs
-      const data = { page: '/different-page', comments: [{
-        id: 'mis2', type: 'pin', author: 'X', text: 'hi',
-        color: '#f59e0b', geom: { kind: 'pin', selector: 'body', x: 0.5, y: 0.5 },
-        resolved: false, replies: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-      }]};
-      // Access internal via global hook if exposed, else skip
-      if (window._annotateImportForTest) window._annotateImportForTest(data);
-    });
-    // The mismatch toast is info-level; it may appear if the hook is wired.
-    // For now verify geom is validated - malformed geom is rejected
+    await expect(page.locator('.an-toast', { hasText: 'different page' })).toBeVisible();
+    expect(await page.evaluate(() => window.Annotate.comments().length)).toBe(before + 1);
   });
 
   test('import rejects comment with malformed geom', async ({ page }) => {
-    const badCount = await page.evaluate(() => {
+    await page.evaluate(() => {
       const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
-      const storeKey = key || ('annotate:' + (location.host || 'default'));
-      const stored = JSON.parse(localStorage.getItem(storeKey) || '{"comments":[]}');
-      const before = stored.comments.length;
-      // Malformed geom: non-finite coordinates
+      const stored = JSON.parse(localStorage.getItem(key) || '{"comments":[]}');
+      const pageKey = stored.comments[0] ? stored.comments[0].page : '/';
+      // Malformed geom: JSON has no Infinity/NaN, so they serialize as null
       stored.comments.push({
         id: 'bad-1', type: 'pin', author: 'X', text: 'bad geom',
-        color: '#f59e0b', geom: { kind: 'pin', selector: 'body', x: Infinity, y: NaN },
-        page: stored.comments[0] ? stored.comments[0].page : '/',
+        color: '#f59e0b', geom: { kind: 'pin', selector: 'body', x: null, y: null },
+        page: pageKey,
         resolved: false, replies: [],
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       });
-      localStorage.setItem(storeKey, JSON.stringify(stored));
-      window.Annotate.refresh();
-      return window.Annotate.comments().filter(c => c.id === 'bad-1').length;
+      localStorage.setItem(key, JSON.stringify(stored));
     });
-    // Malformed comment persists in storage but isValidGeom correctly
-    // identifies Infinity/NaN during import — test via the validation function indirectly
-    expect(typeof badCount).toBe('number'); // validation tested at unit level
+    // A real import of that same malformed record must be rejected by the
+    // schema validator — never written into storage.
+    const imported = await page.evaluate(() => {
+      const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
+      const before = JSON.parse(localStorage.getItem(key)).comments.length;
+      window.Annotate._annotateImportForTest({
+        annotate: '1.2.0', kind: 'annotate-export', page: '/',
+        comments: [{
+          id: 'bad-2', type: 'pin', author: 'X', text: 'bad geom',
+          color: '#f59e0b', geom: { kind: 'pin', selector: 'body', x: null, y: null },
+          resolved: false, replies: [],
+          createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        }],
+      });
+      const after = JSON.parse(localStorage.getItem(key)).comments.length;
+      return { before, after };
+    });
+    expect(imported.after).toBe(imported.before);
+  });
+
+  test('import rejects unknown geometry kinds and unknown comment types', async ({ page }) => {
+    const before = await page.evaluate(() => window.Annotate.comments().length);
+    const toastVisible = await page.evaluate(() => {
+      window.Annotate._annotateImportForTest({
+        annotate: '1.2.0', kind: 'annotate-export', page: '/',
+        comments: [
+          { id: 'k-1', type: 'pin', author: 'X', text: 'bad kind', color: '#f59e0b',
+            geom: { kind: 'hexagon', selector: 'body', x: 0.5, y: 0.5 },
+            resolved: false, replies: [],
+            createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+          { id: 't-1', type: 'teleport', author: 'X', text: 'bad type', color: '#f59e0b',
+            resolved: false, replies: [],
+            createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+        ],
+      });
+      return !!document.querySelector('.an-toast.an-error');
+    });
+    expect(toastVisible).toBe(true);
+    expect(await page.evaluate(() => window.Annotate.comments().length)).toBe(before);
+  });
+
+  test('import skips records with duplicate IDs in the same batch', async ({ page }) => {
+    await page.evaluate(() => {
+      const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
+      const stored = JSON.parse(localStorage.getItem(key) || '{"comments":[]}');
+      localStorage.setItem(key, JSON.stringify({ comments: [] }));
+      window.Annotate.refresh();
+    });
+    const count = await page.evaluate(() => {
+      const mk = (id) => ({
+        id, type: 'pin', author: 'X', text: 'dup', color: '#f59e0b',
+        geom: { kind: 'pin', selector: 'body', x: 0.2, y: 0.2 },
+        resolved: false, replies: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      });
+      window.Annotate._annotateImportForTest({
+        annotate: '1.2.0', kind: 'annotate-export', page: '/', comments: [mk('dup-id'), mk('dup-id')],
+      });
+      return window.Annotate.comments().length;
+    });
+    expect(count).toBe(1);
+  });
+
+  test('import skips records whose ID already exists in this project', async ({ page }) => {
+    // Distinct from the intra-batch duplicate case: a single incoming record
+    // whose id is already present in this project must be skipped, not merged
+    // or duplicated.
+    const count = await page.evaluate(() => {
+      const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
+      const mk = (id, text) => ({
+        id, type: 'pin', author: 'X', text, color: '#f59e0b',
+        geom: { kind: 'pin', selector: 'body', x: 0.2, y: 0.2 },
+        resolved: false, replies: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      });
+      // An existing comment already lives in this project…
+      const existing = mk('already-here', 'existing');
+      existing.page = 'annotate-demo:/';
+      localStorage.setItem(key, JSON.stringify({ comments: [existing] }));
+      window.Annotate.refresh();
+      // …and the import carries the very same id.
+      window.Annotate._annotateImportForTest({
+        annotate: '1.2.0', kind: 'annotate-export', page: '/',
+        comments: [mk('already-here', 'incoming duplicate'), mk('fresh-id', 'new one')],
+      });
+      return {
+        count: window.Annotate.comments().length,
+        texts: window.Annotate.comments().map(c => c.text),
+      };
+    });
+    // The existing id is skipped; only the genuinely new record is added.
+    expect(count.count).toBe(2);
+    expect(count.texts).toContain('existing');
+    expect(count.texts).toContain('new one');
+    expect(count.texts).not.toContain('incoming duplicate');
+  });
+
+  test('import validates reply structure', async ({ page }) => {
+    const before = await page.evaluate(() => window.Annotate.comments().length);
+    const imported = await page.evaluate(() => {
+      const mk = (replies) => ({
+        id: 'rep-test', type: 'note', author: 'X', text: 'replies check', color: '#f59e0b',
+        resolved: false, replies,
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      });
+      window.Annotate._annotateImportForTest({
+        annotate: '1.2.0', kind: 'annotate-export', page: '/',
+        comments: [
+          mk([{ id: 'r1', author: 'R', text: 'ok', createdAt: new Date().toISOString() }]),
+          mk(['not-a-reply']),
+          mk([{ author: 'missing id', text: 'x', createdAt: new Date().toISOString() }]),
+        ],
+      });
+      return window.Annotate.comments().length;
+    });
+    // Only the record with well-formed replies passes validation.
+    expect(imported).toBe(before + 1);
+  });
+
+  test('real file import via the file chooser imports one comment', async ({ page }) => {
+    const before = await page.evaluate(() => window.Annotate.comments().length);
+    const [fileChooser] = await Promise.all([
+      page.waitForEvent('filechooser'),
+      page.evaluate(() => window.Annotate._annotateOpenImportForTest()),
+    ]);
+    await fileChooser.setFiles({
+      name: 'review.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify({
+        annotate: '1.2.0', kind: 'annotate-export', page: '/',
+        comments: [{
+          id: 'file-1', type: 'pin', author: 'X', text: 'From a real file',
+          color: '#f59e0b', geom: { kind: 'pin', selector: 'body', x: 0.5, y: 0.5 },
+          resolved: false, replies: [],
+          createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        }],
+      })),
+    });
+    await expect(page.locator('.an-toast', { hasText: 'Imported 1 comment' })).toBeVisible();
+    expect(await page.evaluate(() => window.Annotate.comments().length)).toBe(before + 1);
+  });
+
+  test('invalid JSON file shows an error toast and imports nothing', async ({ page }) => {
+    const before = await page.evaluate(() => window.Annotate.comments().length);
+    const [fileChooser] = await Promise.all([
+      page.waitForEvent('filechooser'),
+      page.evaluate(() => window.Annotate._annotateOpenImportForTest()),
+    ]);
+    await fileChooser.setFiles({
+      name: 'broken.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from('{ this is not json'),
+    });
+    await expect(page.locator('.an-toast.an-error', { hasText: 'isn’t valid JSON' })).toBeVisible();
+    expect(await page.evaluate(() => window.Annotate.comments().length)).toBe(before);
+  });
+});
+
+test.describe('Storage failures', () => {
+  test('when localStorage writes fail, comments are kept in memory, exportable, and the failure is surfaced', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const orig = Storage.prototype.setItem;
+      Storage.prototype.setItem = function () {
+        throw new DOMException('denied', 'SecurityError');
+      };
+      try {
+        const before = window.Annotate.comments().length;
+        window.Annotate._annotateCreateForTest({ type: 'note', text: 'kept in memory', color: '#f59e0b' });
+        const after = window.Annotate.comments();
+        // The comment must be in memory…
+        const inMemory = after.some(c => c.text === 'kept in memory');
+        // …but absent from localStorage (write failed)…
+        const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
+        const inStorage = (JSON.parse(localStorage.getItem(key) || '{"comments":[]}').comments || [])
+          .some(c => c.text === 'kept in memory');
+        // …and it must be present in the export payload.
+        const exp = window.Annotate._annotateExportPayloadForTest();
+        const inExport = !!(exp && exp.comments.some(c => c.text === 'kept in memory'));
+        const warned = !!document.getElementById('__an_unsaved');
+        return { inMemory, inStorage, inExport, warned, grew: after.length === before + 1 };
+      } finally {
+        Storage.prototype.setItem = orig;
+      }
+    });
+    expect(res.inMemory).toBe(true);
+    expect(res.inStorage).toBe(false);
+    expect(res.inExport).toBe(true);
+    expect(res.warned).toBe(true);
+    expect(res.grew).toBe(true);
+  });
+
+  test('a failed preference write does not raise the unsaved-comments banner', async ({ page }) => {
+    // The banner is about comment persistence. A failure writing an unrelated
+    // preference (e.g. an-color) must not make it look like comments are at risk.
+    const res = await page.evaluate(() => {
+      // Ensure no banner is present to start.
+      const existing = document.getElementById('__an_unsaved');
+      if (existing) existing.remove();
+      const orig = Storage.prototype.setItem;
+      // Only the preference key fails; comment writes keep working.
+      Storage.prototype.setItem = function (k, v) {
+        if (k === 'an-color') throw new DOMException('denied', 'SecurityError');
+        return orig.call(this, k, v);
+      };
+      try {
+        // A successful comment write must leave the banner off…
+        window.Annotate._annotateCreateForTest({ type: 'note', text: 'fine', color: '#f59e0b' });
+        const afterCommentWrite = !!document.getElementById('__an_unsaved');
+        // …and a failing preference write must not raise it either.
+        const sw = document.querySelector('#__an_colorpop .an-sw');
+        if (sw) sw.click();
+        const afterPrefWrite = !!document.getElementById('__an_unsaved');
+        return { afterCommentWrite, afterPrefWrite };
+      } finally {
+        Storage.prototype.setItem = orig;
+      }
+    });
+    expect(res.afterCommentWrite).toBe(false);
+    expect(res.afterPrefWrite).toBe(false);
   });
 });
 
@@ -988,47 +1345,342 @@ test.describe('Landing page startup', () => {
 });
 
 // ============================================================
+// SPA PAGE ISOLATION
+// ============================================================
+test.describe('SPA page isolation', () => {
+  test('refresh() after in-page navigation switches the page key and its comments', async ({ page }) => {
+    // Seed one comment on the landing page, then simulate SPA navigation to a
+    // new route. The layer must recompute the (non-explicit) page key so the
+    // new route does NOT show the old route's comments, and new comments
+    // created after the switch are tagged with the new key.
+    await page.evaluate(() => {
+      const key = 'annotate:annotate-demo'; // data-project on the landing page
+      const stored = { comments: [{
+        id: 'spa-old', type: 'note', author: 'SPA', text: 'on first route',
+        color: '#f59e0b', page: 'annotate-demo:/',
+        resolved: false, replies: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }]};
+      localStorage.setItem(key, JSON.stringify(stored));
+      window.Annotate.refresh();
+    });
+    expect(await page.evaluate(() => window.Annotate.comments().length)).toBe(1);
+    expect(await page.evaluate(() => window.Annotate.config.page)).toBe('/');
+
+    // Navigate in-page (what a history-based SPA router does) and refresh.
+    await page.evaluate(() => {
+      history.pushState({}, '', '/new-route');
+      window.Annotate.refresh();
+    });
+
+    expect(await page.evaluate(() => window.Annotate.config.page)).toBe('/new-route');
+    // The old route's comment must not leak into the new route.
+    expect(await page.evaluate(() => window.Annotate.comments().length)).toBe(0);
+
+    // A comment created on the new route is tagged with the new page key.
+    await page.evaluate(() => {
+      window.Annotate._annotateCreateForTest({ type: 'note', text: 'on new route', color: '#f59e0b' });
+    });
+    const saved = await page.evaluate(() => {
+      const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
+      return JSON.parse(localStorage.getItem(key)).comments
+        .filter(c => c.text === 'on new route').map(c => c.page);
+    });
+    expect(saved).toEqual(['annotate-demo:/new-route']);
+  });
+
+  test('page key is stable until the host calls refresh()', async ({ page }) => {
+    // Navigation alone must not silently retag comments; only an explicit
+    // refresh() (which SPA routers call) may recompute the page key.
+    await page.evaluate(() => { history.pushState({}, '', '/elsewhere'); });
+    expect(await page.evaluate(() => window.Annotate.config.page)).toBe('/');
+    // Comments created before an explicit refresh still land on the old key.
+    await page.evaluate(() => {
+      window.Annotate._annotateCreateForTest({ type: 'note', text: 'pre-refresh', color: '#f59e0b' });
+    });
+    const pages = await page.evaluate(() => {
+      const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
+      return JSON.parse(localStorage.getItem(key)).comments
+        .filter(c => c.text === 'pre-refresh').map(c => c.page);
+    });
+    expect(pages).toEqual(['annotate-demo:/']);
+  });
+});
+
+// ============================================================
+// OVERLAY RE-ANCHORING
+// ============================================================
+test.describe('Overlay re-anchoring', () => {
+  test('pin repositions when its anchor block grows', async ({ page }) => {
+    // A pin anchored to the hero paragraph: when the paragraph grows (its
+    // layout shifts), the pin must track the anchor's new box on the next
+    // render pass — not stay frozen at its original position.
+    await page.evaluate(() => {
+      const key = 'annotate:annotate-demo';
+      const stored = { comments: [{
+        id: 'reanchor-1', type: 'pin', author: 'Test', text: 'Tracking pin',
+        color: '#f59e0b',
+        geom: { kind: 'pin', selector: 'body', x: 0.5, y: 0.5, vw: window.innerWidth, vh: window.innerHeight },
+        page: 'annotate-demo:/',
+        resolved: false, replies: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }]};
+      localStorage.setItem(key, JSON.stringify(stored));
+      window.Annotate.refresh();
+    });
+    await expect(page.locator('.an-pin')).toHaveCount(1);
+    // Let startup renders (window-load / fonts.ready) settle so the only
+    // layout change that follows is the spacer we inject.
+    await page.waitForTimeout(800);
+    const before = await page.evaluate(() => {
+      const p = document.querySelector('.an-pin');
+      return { left: p.style.left, top: p.style.top };
+    });
+    // Grow a large block above the pin's anchor area so document coordinates
+    // shift — no window resize occurs, only the ResizeObserver on <body> sees it.
+    await page.evaluate(() => {
+      const spacer = document.createElement('div');
+      spacer.id = '__dbg_spacer';
+      spacer.style.height = '1200px';
+      document.body.insertBefore(spacer, document.body.firstChild);
+    });
+    await page.waitForTimeout(500); // observer + rAF coalescing
+    const after = await page.evaluate(() => {
+      const p = document.querySelector('.an-pin');
+      return p ? { left: p.style.left, top: p.style.top } : null;
+    });
+    expect(after).toBeTruthy();
+    // A pin at 50% of a document that just grew 1200px tall must have moved down.
+    expect(parseFloat(after.top)).toBeGreaterThan(parseFloat(before.top));
+    await page.evaluate(() => { document.getElementById('__dbg_spacer')?.remove(); });
+  });
+});
+
+// ============================================================
+// ANCHOR INTEGRITY
+// ============================================================
+test.describe('Anchor integrity', () => {
+  test('ambiguous text match shows an unanchored warning instead of a silent guess', async ({ page }) => {
+    const phrase = 'review surface'; // occurs once in .hero-sub
+    const occurrences = await page.evaluate((phrase) => {
+      // Clone the hero paragraph so the phrase occurs in two places — the
+      // stored quote below can no longer identify a single intended target.
+      const src = document.querySelector('.hero-sub');
+      const clone = src.cloneNode(true);
+      clone.id = '__dup_hero_sub';
+      src.insertAdjacentElement('afterend', clone);
+      const stored = { comments: [{
+        id: 'ambig-1', type: 'highlight', author: 'T', text: 'which one?',
+        color: '#f59e0b',
+        anchor: { exact: phrase, prefix: '', suffix: '' },
+        resolved: false, replies: [],
+        page: 'annotate-demo:/',
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }]};
+      localStorage.setItem('annotate:annotate-demo', JSON.stringify(stored));
+      window.Annotate.refresh();
+      return document.body.textContent.split(phrase).length - 1;
+    }, phrase);
+    expect(occurrences).toBeGreaterThanOrEqual(2);
+    // The library must not silently highlight an arbitrary copy: it surfaces
+    // an explicit unanchored/ambiguous state (no mark is painted).
+    await expect(page.locator('mark[data-an="ambig-1"]')).toHaveCount(0);
+    await expect(page.locator('.an-unanchored-pill')).toHaveCount(1);
+  });
+
+  test('shape anchored to a missing element is flagged as unanchored', async ({ page }) => {
+    await page.evaluate(() => {
+      const stored = { comments: [{
+        id: 'ghost-1', type: 'shape', author: 'T', text: 'where am I',
+        color: '#f59e0b',
+        geom: { kind: 'rect', selector: '#ghost-999', x: 0.1, y: 0.1, w: 0.3, h: 0.2,
+          vw: window.innerWidth, vh: window.innerHeight },
+        page: 'annotate-demo:/',
+        resolved: false, replies: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }]};
+      localStorage.setItem('annotate:annotate-demo', JSON.stringify(stored));
+      window.Annotate.refresh();
+    });
+    // The badge takes the explicit "element missing" state, not a silent body fallback.
+    await expect(page.locator('.an-badge-circle[title*="missing"]')).toHaveCount(1);
+  });
+
+  test('multiple missing anchors get distinct badge positions', async ({ page }) => {
+    await page.evaluate(() => {
+      const mk = (id, sel) => ({
+        id, type: 'shape', author: 'T', text: 'ghost ' + id, color: '#f59e0b',
+        geom: { kind: 'rect', selector: sel, x: 0.1, y: 0.1, w: 0.3, h: 0.2 },
+        page: 'annotate-demo:/', resolved: false, replies: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      });
+      const stored = { comments: [mk('g1', '#ghost-a'), mk('g2', '#ghost-b')] };
+      localStorage.setItem('annotate:annotate-demo', JSON.stringify(stored));
+      window.Annotate.refresh();
+    });
+    const circles = page.locator('.an-badge-circle[title*="missing"]');
+    await expect(circles).toHaveCount(2);
+    const cx = await circles.evaluateAll((els) => els.map((e) => e.getAttribute('cx')));
+    expect(new Set(cx).size).toBe(2);
+  });
+
+  test('repeated text with unique surrounding context still highlights', async ({ page }) => {
+    // "bravo" occurs twice, but the saved prefix+suffix context matches only
+    // the first occurrence — the highlight must NOT be treated as ambiguous.
+    await page.evaluate(() => {
+      const host = document.createElement('div');
+      host.id = '__ctx_host';
+      host.innerHTML = '<p>ALPHA bravo charlie</p><p>delta bravo echo</p>';
+      document.body.appendChild(host);
+      const stored = { comments: [{
+        id: 'ctx-1', type: 'highlight', author: 'T', text: 'contextual',
+        color: '#f59e0b', anchor: { exact: 'bravo', prefix: 'ALPHA ', suffix: ' charlie' },
+        page: 'annotate-demo:/', resolved: false, replies: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }]};
+      localStorage.setItem('annotate:annotate-demo', JSON.stringify(stored));
+      window.Annotate.refresh();
+    });
+    // Exactly one mark is painted (the contextualized occurrence), no pill.
+    await expect(page.locator('mark[data-an="ctx-1"]')).toHaveCount(1);
+    await expect(page.locator('.an-unanchored-pill')).toHaveCount(0);
+  });
+
+  test('repeated text with no distinguishing context is flagged ambiguous', async ({ page }) => {
+    // Same word twice with empty saved context — genuinely ambiguous.
+    await page.evaluate(() => {
+      const host = document.createElement('div');
+      host.id = '__amb_host';
+      host.innerHTML = '<p>foo bravo bar</p><p>baz bravo qux</p>';
+      document.body.appendChild(host);
+      const stored = { comments: [{
+        id: 'amb-2', type: 'highlight', author: 'T', text: 'which bravo',
+        color: '#f59e0b', anchor: { exact: 'bravo', prefix: '', suffix: '' },
+        page: 'annotate-demo:/', resolved: false, replies: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }]};
+      localStorage.setItem('annotate:annotate-demo', JSON.stringify(stored));
+      window.Annotate.refresh();
+    });
+    await expect(page.locator('mark[data-an="amb-2"]')).toHaveCount(0);
+    await expect(page.locator('.an-unanchored-pill')).toHaveCount(1);
+  });
+});
+
+// ============================================================
+// MARKER KEYBOARD ACCESSIBILITY
+// ============================================================
+test.describe('Marker keyboard accessibility', () => {
+  async function seedPin(page) {
+    await page.evaluate(() => {
+      const stored = { comments: [{
+        id: 'kbd-pin', type: 'pin', author: 'T', text: 'Keyboard pin',
+        color: '#f59e0b', geom: { kind: 'pin', selector: 'body', x: 0.5, y: 0.5 },
+        page: 'annotate-demo:/', resolved: false, replies: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }]};
+      localStorage.setItem('annotate:annotate-demo', JSON.stringify(stored));
+      window.Annotate.refresh();
+    });
+    await page.waitForTimeout(300);
+    return page.locator('.an-pin');
+  }
+
+  test('pins are focusable and open their comment with Enter', async ({ page }) => {
+    const pin = await seedPin(page);
+    await expect(pin).toHaveCount(1);
+    await pin.focus();
+    await expect(pin).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#__an_panel')).toHaveClass(/an-open/);
+    await expect(page.locator('.an-card.an-active')).toHaveCount(1);
+  });
+
+  test('pins are focusable and open their comment with Space', async ({ page }) => {
+    const pin = await seedPin(page);
+    await pin.focus();
+    await page.keyboard.press('Space');
+    await expect(page.locator('#__an_panel')).toHaveClass(/an-open/);
+    await expect(page.locator('.an-card.an-active')).toHaveCount(1);
+  });
+
+  test('annotation markers expose accessible names', async ({ page }) => {
+    const pin = await seedPin(page);
+    await expect(pin).toHaveAttribute('aria-label', expect.stringContaining('comment #1'));
+  });
+
+  test('shape badges are focusable and open their comment with Enter', async ({ page }) => {
+    await page.evaluate(() => {
+      const stored = { comments: [{
+        id: 'kbd-rect', type: 'shape', author: 'T', text: 'Keyboard shape',
+        color: '#f59e0b',
+        geom: { kind: 'rect', selector: 'header.hero', x: 0.1, y: 0.1, w: 0.3, h: 0.2 },
+        page: 'annotate-demo:/', resolved: false, replies: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }]};
+      localStorage.setItem('annotate:annotate-demo', JSON.stringify(stored));
+      window.Annotate.refresh();
+    });
+    await page.waitForTimeout(300);
+    const badge = page.locator('#__an_overlay [tabindex="0"]').first();
+    await expect(badge).toHaveCount(1);
+    await badge.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#__an_panel')).toHaveClass(/an-open/);
+    await expect(page.locator('.an-card.an-active')).toHaveCount(1);
+  });
+});
+
+// ============================================================
 // ARCHITECTURAL IMPROVEMENTS
 // ============================================================
 test.describe('Architectural improvements', () => {
-  test('comment IDs are distinct when import assigns new IDs to id-less entries', async ({ page }) => {
-    // importComments() calls uid() for every comment whose id is null.
-    // Verify all 20 assigned IDs are unique.
-    const storeKey = 'annotate:annotate-demo';
-    const allUnique = await page.evaluate((key) => {
+  test('import preserves distinct IDs for a batch of well-formed comments', async ({ page }) => {
+    // End-to-end: feed 20 distinct, valid records through the real import path
+    // (via the file-agnostic hook) and confirm all 20 land with distinct IDs.
+    const res = await page.evaluate(() => {
+      const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
+      const stored = JSON.parse(localStorage.getItem(key) || '{"comments":[]}');
+      localStorage.setItem(key, JSON.stringify({ comments: [] }));
+      window.Annotate.refresh();
       const batch = [];
       for (let i = 0; i < 20; i++) {
         batch.push({
-          // id explicitly null so importComments regenerates each one
-          id: null, type: 'pin', author: 'Test', text: 'C' + i,
-          color: '#f59e0b', page: 'annotate-demo:/',
+          id: 'batch-' + i, type: 'pin', author: 'Test', text: 'C' + i,
+          color: '#f59e0b',
           geom: { kind: 'pin', selector: 'body', x: 0.1 * (i % 10), y: 0.5 },
           resolved: false, replies: [],
           createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
         });
       }
-      // importComments reads existing IDs, so clear state first
-      const stored = { comments: [] };
-      localStorage.setItem(key, JSON.stringify(stored));
-      // Call importComments via the internal path by crafting a data object
-      // that matches what pickImportFile feeds to it:
-      const data = { annotate: '1.0.1', kind: 'annotate-export', page: 'annotate-demo:/', comments: batch };
-      // We can't call importComments directly, so simulate via the reader callback
-      // by writing to storage with null ids and then using Annotate.refresh()
-      // which loads them. IDs remain null in storage.
-      // Instead: verify uid() itself is collision-free by generating 50 with the same logic
-      function uid() {
-        if (window.crypto && window.crypto.getRandomValues) {
-          var arr = new Uint32Array(3);
-          window.crypto.getRandomValues(arr);
-          return 'c' + arr[0].toString(36) + arr[1].toString(36) + arr[2].toString(36);
-        }
-        return 'c' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
-      }
-      const ids = Array.from({ length: 50 }, uid);
-      return new Set(ids).size === 50;
-    }, storeKey);
-    expect(allUnique).toBe(true);
+      window.Annotate._annotateImportForTest({ annotate: '1.2.0', kind: 'annotate-export', page: '/', comments: batch });
+      const after = window.Annotate.comments();
+      return { count: after.length, ids: after.map(c => c.id), allDistinct: new Set(after.map(c => c.id)).size === after.length };
+    });
+    expect(res.count).toBe(20);
+    expect(res.allDistinct).toBe(true);
+    expect(res.ids).toContain('batch-0');
+    expect(res.ids).toContain('batch-19');
+  });
+
+  test('import rejects id-less records instead of silently reassigning', async ({ page }) => {
+    // A record with no string id cannot be deduplicated or deep-linked, so it
+    // is rejected rather than mutated — import surfaces an error toast.
+    const before = await page.evaluate(() => window.Annotate.comments().length);
+    const res = await page.evaluate(() => {
+      window.Annotate._annotateImportForTest({
+        annotate: '1.2.0', kind: 'annotate-export', page: '/',
+        comments: [{
+          type: 'pin', author: 'X', text: 'no id', color: '#f59e0b',
+          geom: { kind: 'pin', selector: 'body', x: 0.3, y: 0.3 },
+          resolved: false, replies: [],
+          createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        }],
+      });
+      return { count: window.Annotate.comments().length, errored: !!document.querySelector('.an-toast.an-error') };
+    });
+    expect(res.count).toBe(before);
+    expect(res.errored).toBe(true);
   });
 
   test('pin geom stores viewport dimensions at draw time', async ({ page }) => {
@@ -1142,5 +1794,205 @@ test.describe('Architectural improvements', () => {
     await page.waitForTimeout(300);
     const count2 = await page.evaluate(() => window.Annotate.comments().length);
     expect(count2).toBeGreaterThan(count1);
+  });
+});
+
+// ============================================================
+// REVIEW-FIX REGRESSIONS (from the codex advisor review of
+// commit 8379d2b). Each test pins one identified defect.
+// ============================================================
+test.describe('Review fixes', () => {
+  test('an unsaved comment survives refresh() while storage is denied', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const orig = Storage.prototype.setItem;
+      Storage.prototype.setItem = function () { throw new DOMException('denied', 'SecurityError'); };
+      try {
+        window.Annotate._annotateCreateForTest({ type: 'note', text: 'unsaved-fresh', color: '#f59e0b' });
+        const before = window.Annotate.comments().some(c => c.text === 'unsaved-fresh');
+        window.Annotate.refresh();
+        const after = window.Annotate.comments().some(c => c.text === 'unsaved-fresh');
+        return { before, after };
+      } finally { Storage.prototype.setItem = orig; }
+    });
+    expect(res.before).toBe(true);
+    // refresh() must not discard work that never reached storage.
+    expect(res.after).toBe(true);
+  });
+
+  test('editing an unsaved comment still applies the change in memory', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const orig = Storage.prototype.setItem;
+      Storage.prototype.setItem = function () { throw new DOMException('denied', 'SecurityError'); };
+      try {
+        const c = window.Annotate._annotateCreateForTest({ type: 'note', text: 'orig', color: '#f59e0b' });
+        const updated = window.Annotate._annotatePatchForTest(c.id, { text: 'edited' });
+        const inState = window.Annotate.comments().some(x => x.id === c.id && x.text === 'edited');
+        return { patchResult: updated ? updated.text : null, inState };
+      } finally { Storage.prototype.setItem = orig; }
+    });
+    // patchComment must not return null just because the record is not in storage.
+    expect(res.patchResult).toBe('edited');
+    expect(res.inState).toBe(true);
+  });
+
+  test('import skips an id that already exists on a different page of the project', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const key = 'annotate:annotate-demo';
+      const mk = (id, pg, text) => ({
+        id, type: 'pin', page: pg, author: 'X', text, color: '#f59e0b',
+        geom: { kind: 'pin', selector: 'body', x: 0.2, y: 0.2 },
+        resolved: false, replies: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      });
+      localStorage.setItem(key, JSON.stringify({ comments: [mk('collide', 'annotate-demo:/other-route', 'on other page')] }));
+      window.Annotate.refresh();
+      window.Annotate._annotateImportForTest({
+        annotate: '1.2.0', kind: 'annotate-export', page: '/',
+        comments: [mk('collide', '/', 'incoming colliding id')],
+      });
+      return window.Annotate.comments().map(c => c.text);
+    });
+    // The same ID already lives on another page of this project — do not import.
+    expect(res).not.toContain('incoming colliding id');
+  });
+
+  test('replies are truncated and thread caps enforced at input time', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const c = window.Annotate._annotateCreateForTest({ type: 'note', text: 'x', color: '#f59e0b' });
+      const longText = 'a'.repeat(6000);
+      const updated = window.Annotate._annotatePatchForTest(c.id, {
+        reply: { id: 'r1', author: 'X', text: longText, createdAt: new Date().toISOString() },
+      });
+      const replyTextLen = updated.replies[0].text.length;
+      // Drive a thread up to the cap and confirm the next reply is refused.
+      let c2 = window.Annotate._annotateCreateForTest({ type: 'note', text: 'capthread', color: '#f59e0b' });
+      for (let i = 0; i < 500; i++) {
+        c2 = window.Annotate._annotatePatchForTest(c2.id, {
+          reply: { id: 'r' + i, author: 'X', text: 'ok', createdAt: new Date().toISOString() },
+        });
+      }
+      const capLen = c2.replies.length;
+      const extra = window.Annotate._annotatePatchForTest(c2.id, {
+        reply: { id: 'r-extra', author: 'X', text: 'should-not-add', createdAt: new Date().toISOString() },
+      });
+      const afterExtra = extra.replies.length;
+      return { replyTextLen, capLen, afterExtra };
+    });
+    expect(res.replyTextLen).toBe(5000);
+    expect(res.capLen).toBe(500);
+    expect(res.afterExtra).toBe(500); // 501st reply refused
+  });
+
+  test('malformed stored records are skipped on load instead of crashing', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const key = 'annotate:annotate-demo';
+      const existing = JSON.parse(localStorage.getItem(key) || '{"comments":[]}');
+      const pageKey = existing.comments[0] ? existing.comments[0].page : 'annotate-demo:/';
+      const good = { id: 'good-1', type: 'pin', page: pageKey, author: 'X', text: 'fine', color: '#f59e0b',
+        geom: { kind: 'pin', selector: 'body', x: 0.5, y: 0.5 }, resolved: false, replies: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      localStorage.setItem(key, JSON.stringify({ comments: [
+        null,
+        good,
+        { id: 'bad-geom', type: 'pin', page: pageKey, author: 'X', text: 'x', color: '#f59e0b',
+          geom: { kind: 'pin', selector: 'body', x: null, y: null }, resolved: false, replies: [],
+          createdAt: '', updatedAt: '' },
+        { id: 'bad-type-geom', type: 'shape', page: pageKey, author: 'X', text: 'y', color: '#f59e0b',
+          geom: { kind: 'pin', selector: 'body', x: 0.5, y: 0.5 }, resolved: false, replies: [],
+          createdAt: '', updatedAt: '' },
+      ] }));
+      let threw = null;
+      try { window.Annotate.refresh(); } catch (e) { threw = e && e.name; }
+      const texts = window.Annotate.comments().map(c => c.text);
+      return { threw, texts };
+    });
+    expect(res.threw).toBe(null);
+    expect(res.texts).toContain('fine');
+    expect(res.texts).not.toContain('x');
+    expect(res.texts).not.toContain('y');
+  });
+
+  test('a storage sync event does not switch page identity before refresh()', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const c = window.Annotate._annotateCreateForTest({ type: 'note', text: 'routepin', color: '#f59e0b' });
+      history.pushState({}, '', '/other-route');
+      const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
+      window.dispatchEvent(new StorageEvent('storage', { key, newValue: localStorage.getItem(key), storageArea: localStorage }));
+      return window.Annotate.comments().map(x => x.text);
+    });
+    // The comment belongs to the original route; a sync load must not switch PAGE.
+    expect(res).toContain('routepin');
+  });
+
+  test('overlapping occurrences are counted individually', async ({ page }) => {
+    // "ana" occurs twice inside "banana" (index 1 and index 3). Advancing the
+    // scan by the needle length used to miss the second, overlapping hit.
+    const n = await page.evaluate(() => window.Annotate._annotateCountOccurrencesForTest('banana', 'ana'));
+    expect(n).toBe(2);
+  });
+
+  test('activating undo twice does not duplicate the comment', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const c = window.Annotate._annotateCreateForTest({ type: 'note', text: 'doomed', color: '#f59e0b' });
+      const card = document.querySelector('[data-id="' + c.id + '"]');
+      card.querySelector('.an-mini.an-danger').click();
+      const undoBtn = document.querySelector('.an-taction');
+      undoBtn.click();
+      undoBtn.click(); // double activation in the same tick
+      const inMemory = window.Annotate.comments().filter(x => x.id === c.id).length;
+      const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
+      const inStorage = JSON.parse(localStorage.getItem(key) || '{"comments":[]}').comments.filter(x => x.id === c.id).length;
+      return { inMemory, inStorage };
+    });
+    expect(res.inMemory).toBe(1);
+    expect(res.inStorage).toBeLessThanOrEqual(1);
+  });
+
+  test('highlight marks are keyboard-operable (role=button, tabindex=0)', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const p = document.createElement('p');
+      p.textContent = 'a uniquely quotable phrase for keyboard testing';
+      document.body.appendChild(p);
+      const c = window.Annotate._annotateCreateForTest({
+        type: 'highlight', color: '#f59e0b', text: 'kbd',
+        anchor: { prefix: '', exact: 'uniquely quotable phrase for keyboard testing', suffix: '' },
+      });
+      const mark = document.querySelector('mark.an-mark[data-an="' + c.id + '"]');
+      return { role: mark && mark.getAttribute('role'), tabindex: mark && mark.getAttribute('tabindex') };
+    });
+    expect(res.role).toBe('button');
+    expect(res.tabindex).toBe('0');
+  });
+
+  test('stored highlight with a null anchor is skipped without crashing', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const key = 'annotate:annotate-demo';
+      const good = { id: 'h-good', page: 'annotate-demo:/', type: 'note', author: 'X', text: 'ok', color: '#f59e0b', resolved: false, replies: [], createdAt: '', updatedAt: '' };
+      localStorage.setItem(key, JSON.stringify({ comments: [
+        { id: 'h-null', page: 'annotate-demo:/', type: 'highlight', author: 'X', text: 'x', color: '#f59e0b', anchor: null, resolved: false, replies: [], createdAt: '', updatedAt: '' },
+        good,
+      ] }));
+      let threw = null;
+      try { window.Annotate.refresh(); } catch (e) { threw = e && e.name; }
+      return { threw, texts: window.Annotate.comments().map(c => c.text) };
+    });
+    expect(res.threw).toBe(null);
+    expect(res.texts).toEqual(['ok']);
+  });
+
+  test('clear() also removes comments created while storage was denied', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const orig = Storage.prototype.setItem;
+      Storage.prototype.setItem = function () { throw new DOMException('denied', 'SecurityError'); };
+      try {
+        window.Annotate._annotateCreateForTest({ type: 'note', text: 'unsaved-clear', color: '#f59e0b' });
+        const had = window.Annotate.comments().some(c => c.text === 'unsaved-clear');
+        window.Annotate.clear();
+        const after = window.Annotate.comments().some(c => c.text === 'unsaved-clear');
+        return { had, after };
+      } finally { Storage.prototype.setItem = orig; }
+    });
+    expect(res.had).toBe(true);
+    expect(res.after).toBe(false);
   });
 });

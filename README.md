@@ -28,7 +28,8 @@ That single line is the whole installation.
   import it with one click and see every note in place.
 - **Polished UI.** A floating toolbar, a Figma-style comments panel, light/dark
   themes that auto-adapt to your page, and full keyboard shortcuts.
-- **Tiny & dependency-free.** ~40 KB of vanilla JavaScript, zero dependencies.
+- **Tiny & dependency-free.** ~110 KB of vanilla JavaScript (unminified, zero
+  dependencies) — minify it for production to cut that to a few tens of KB.
 
 ---
 
@@ -348,7 +349,7 @@ Annotate.version;             // "1.2.0"
 ```bash
 git clone git@github.com:reviewjs/annotate.git
 cd annotate
-npm start          # serves the demo at http://localhost:3000
+npm start          # serves the demo at http://localhost:4200
 ```
 
 Open [`index.html`](./index.html) and start annotating. Framework examples live

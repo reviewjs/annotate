@@ -47,6 +47,7 @@
   },
   "author": "Akash Goswami",
   "devDependencies": {
-    "@playwright/test": "^1.61.0"
+    "@playwright/test": "^1.61.0",
+    "serve": "^14.2.6"
   }
 }
