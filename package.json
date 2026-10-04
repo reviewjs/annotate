@@ -1,6 +1,6 @@
 {
   "name": "@reviewjs/annotate",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "A drop-in visual review & annotation layer for any website. Local-only, zero backend. Highlight text, draw shapes, drop pins and leave threaded comments — then download them as JSON.",
   "main": "annotate.js",
   "unpkg": "annotate.js",

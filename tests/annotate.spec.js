@@ -723,7 +723,7 @@ test.describe('Export / Import', () => {
     const before = await page.evaluate(() => window.Annotate.comments().length);
     await page.evaluate(() => {
       window.Annotate._annotateImportForTest({
-        annotate: '1.2.0', kind: 'annotate-export', page: '/some-other-page',
+        annotate: '1.3.0', kind: 'annotate-export', page: '/some-other-page',
         comments: [{
           id: 'mismatch-1', type: 'pin', author: 'Tester', text: 'From elsewhere',
           color: '#f59e0b', geom: { kind: 'pin', selector: 'body', x: 0.5, y: 0.5 },
@@ -757,7 +757,7 @@ test.describe('Export / Import', () => {
       const key = Object.keys(localStorage).find(k => k.startsWith('annotate:'));
       const before = JSON.parse(localStorage.getItem(key)).comments.length;
       window.Annotate._annotateImportForTest({
-        annotate: '1.2.0', kind: 'annotate-export', page: '/',
+        annotate: '1.3.0', kind: 'annotate-export', page: '/',
         comments: [{
           id: 'bad-2', type: 'pin', author: 'X', text: 'bad geom',
           color: '#f59e0b', geom: { kind: 'pin', selector: 'body', x: null, y: null },
@@ -775,7 +775,7 @@ test.describe('Export / Import', () => {
     const before = await page.evaluate(() => window.Annotate.comments().length);
     const toastVisible = await page.evaluate(() => {
       window.Annotate._annotateImportForTest({
-        annotate: '1.2.0', kind: 'annotate-export', page: '/',
+        annotate: '1.3.0', kind: 'annotate-export', page: '/',
         comments: [
           { id: 'k-1', type: 'pin', author: 'X', text: 'bad kind', color: '#f59e0b',
             geom: { kind: 'hexagon', selector: 'body', x: 0.5, y: 0.5 },
@@ -807,7 +807,7 @@ test.describe('Export / Import', () => {
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       });
       window.Annotate._annotateImportForTest({
-        annotate: '1.2.0', kind: 'annotate-export', page: '/', comments: [mk('dup-id'), mk('dup-id')],
+        annotate: '1.3.0', kind: 'annotate-export', page: '/', comments: [mk('dup-id'), mk('dup-id')],
       });
       return window.Annotate.comments().length;
     });
@@ -833,7 +833,7 @@ test.describe('Export / Import', () => {
       window.Annotate.refresh();
       // …and the import carries the very same id.
       window.Annotate._annotateImportForTest({
-        annotate: '1.2.0', kind: 'annotate-export', page: '/',
+        annotate: '1.3.0', kind: 'annotate-export', page: '/',
         comments: [mk('already-here', 'incoming duplicate'), mk('fresh-id', 'new one')],
       });
       return {
@@ -857,7 +857,7 @@ test.describe('Export / Import', () => {
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       });
       window.Annotate._annotateImportForTest({
-        annotate: '1.2.0', kind: 'annotate-export', page: '/',
+        annotate: '1.3.0', kind: 'annotate-export', page: '/',
         comments: [
           mk([{ id: 'r1', author: 'R', text: 'ok', createdAt: new Date().toISOString() }]),
           mk(['not-a-reply']),
@@ -880,7 +880,7 @@ test.describe('Export / Import', () => {
       name: 'review.json',
       mimeType: 'application/json',
       buffer: Buffer.from(JSON.stringify({
-        annotate: '1.2.0', kind: 'annotate-export', page: '/',
+        annotate: '1.3.0', kind: 'annotate-export', page: '/',
         comments: [{
           id: 'file-1', type: 'pin', author: 'X', text: 'From a real file',
           color: '#f59e0b', geom: { kind: 'pin', selector: 'body', x: 0.5, y: 0.5 },
@@ -999,7 +999,7 @@ test.describe('Theme', () => {
 test.describe('Public API (window.Annotate)', () => {
   test('exposes version', async ({ page }) => {
     const version = await page.evaluate(() => window.Annotate.version);
-    expect(version).toBe('1.2.0');
+    expect(version).toBe('1.3.0');
   });
 
   test('open() / close() control the panel', async ({ page }) => {
@@ -1653,7 +1653,7 @@ test.describe('Architectural improvements', () => {
           createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
         });
       }
-      window.Annotate._annotateImportForTest({ annotate: '1.2.0', kind: 'annotate-export', page: '/', comments: batch });
+      window.Annotate._annotateImportForTest({ annotate: '1.3.0', kind: 'annotate-export', page: '/', comments: batch });
       const after = window.Annotate.comments();
       return { count: after.length, ids: after.map(c => c.id), allDistinct: new Set(after.map(c => c.id)).size === after.length };
     });
@@ -1669,7 +1669,7 @@ test.describe('Architectural improvements', () => {
     const before = await page.evaluate(() => window.Annotate.comments().length);
     const res = await page.evaluate(() => {
       window.Annotate._annotateImportForTest({
-        annotate: '1.2.0', kind: 'annotate-export', page: '/',
+        annotate: '1.3.0', kind: 'annotate-export', page: '/',
         comments: [{
           type: 'pin', author: 'X', text: 'no id', color: '#f59e0b',
           geom: { kind: 'pin', selector: 'body', x: 0.3, y: 0.3 },
@@ -1847,7 +1847,7 @@ test.describe('Review fixes', () => {
       localStorage.setItem(key, JSON.stringify({ comments: [mk('collide', 'annotate-demo:/other-route', 'on other page')] }));
       window.Annotate.refresh();
       window.Annotate._annotateImportForTest({
-        annotate: '1.2.0', kind: 'annotate-export', page: '/',
+        annotate: '1.3.0', kind: 'annotate-export', page: '/',
         comments: [mk('collide', '/', 'incoming colliding id')],
       });
       return window.Annotate.comments().map(c => c.text);
