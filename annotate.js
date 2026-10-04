@@ -45,9 +45,10 @@
     document.querySelector('script[src*="annotate"]');
   var scriptData = (SCRIPT && SCRIPT.dataset) || {};   // data-* attributes
   var globalConfig = window.AnnotateConfig || {};       // window.AnnotateConfig
+  var explicitPage = scriptData.page || globalConfig.page || "";
   var CFG = {
     project: scriptData.project || globalConfig.project || "",
-    page: scriptData.page || globalConfig.page || location.pathname,
+    page: explicitPage || location.pathname,
     accent: scriptData.accent || globalConfig.accent || "",
     theme: scriptData.theme || globalConfig.theme || "auto",
     position: scriptData.position || globalConfig.position || "bottom-right",
@@ -56,18 +57,45 @@
     note: scriptData.note || globalConfig.note || "",
     share: String(scriptData.shareEmail || globalConfig.shareEmail || "").trim(),
   };
-  var PAGE = (CFG.project ? CFG.project + ":" : "") + CFG.page;
+  // An explicit data-page / AnnotateConfig.page is fixed; otherwise the page key
+  // tracks the current pathname so history-based SPA routing stays isolated.
+  var pageExplicit = !!explicitPage;
+  function currentPageKey() {
+    if (!pageExplicit) CFG.page = location.pathname;
+    return (CFG.project ? CFG.project + ":" : "") + CFG.page;
+  }
+  var PAGE = currentPageKey();
 
-  // localStorage can be denied (private mode, sandboxed iframes) — never crash
+  // localStorage can be denied (private mode, sandboxed iframes) or fill up —
+  // never crash, and never pretend a failed write persisted. dbWrite reports
+  // success so callers can keep unsaved work in memory and surface the issue.
   var store = {
     get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    // Returns whether the write actually reached storage. Callers must not
+    // assume persistence on failure — that is what surfaces the unsaved banner.
     set: function (k, v) {
-      try { localStorage.setItem(k, v); } catch (e) {
+      try { localStorage.setItem(k, v); return true; } catch (e) {
         if (e && (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED"))
           setTimeout(function () { toast("Storage full — export your comments before adding more.", { kind: "error", duration: 8000 }); }, 0);
+        return false;
       }
     },
   };
+  var UNSAVED_MSG = "Changes may not be saved — this browser is refusing storage. Your comments are kept on screen and can still be downloaded as JSON.";
+  var quotaWarned = false;
+  // Persistent (not toast) warning for the failure modes that toasts can't
+  // express: storage denied outright, or writes silently failing. Visibility
+  // is derived from the write that just happened (`ok`), not a shared flag, so
+  // an unrelated failed preference write can't leave the banner stuck on.
+  function showUnsavedBanner(ok) {
+    if (!ok) {
+      if (!quotaWarned) { quotaWarned = true; toast("Storage is unavailable — your comments are kept on screen only.", { kind: "error", duration: 8000 }); }
+      if (!document.getElementById("__an_unsaved"))
+        document.body.appendChild(el("div", { id: "__an_unsaved", role: "alert", text: UNSAVED_MSG }));
+    } else if (document.getElementById("__an_unsaved")) {
+      document.getElementById("__an_unsaved").remove();
+    }
+  }
   var COLORS = [
     { name: "Amber", hex: "#f59e0b" },
     { name: "Rose", hex: "#f43f5e" },
@@ -160,7 +188,11 @@
     if (!Array.isArray(d.comments)) d.comments = [];
     return d;
   }
-  function dbWrite(d) { store.set(STORE_KEY, JSON.stringify(d)); }
+  function dbWrite(d) {
+    var ok = store.set(STORE_KEY, JSON.stringify(d));
+    showUnsavedBanner(ok);
+    return ok;
+  }
   function uid() {
     if (window.crypto && crypto.getRandomValues) {
       var arr = new Uint32Array(3);
@@ -189,7 +221,9 @@
       createdAt: now,
       updatedAt: now,
     };
-    d.comments.push(c); dbWrite(d);
+    d.comments.push(c);
+    dbWrite(d); // surfaces the banner if the write was refused; the caller
+                // keeps the comment in state so it stays visible & exportable
     return c;
   }
   function patchComment(id, changes) {
@@ -208,7 +242,13 @@
       c.replies = c.replies.filter(function (r) { return r.id !== changes.deleteReply; });
     }
     c.updatedAt = new Date().toISOString();
-    dbWrite(d);
+    if (!dbWrite(d)) {
+      // Mirror the change in memory so the UI stays consistent with what the
+      // user just did, even though it did not reach storage.
+      var live = state.comments.filter(function (x) { return x.id === id; })[0];
+      if (live) mergeComment(c);
+      renderAll(); renderPanel();
+    }
     return c;
   }
   function removeComment(id) {
@@ -330,6 +370,9 @@
   .an-pin span { transform: rotate(-45deg); }
   .an-pin:hover { transform: rotate(45deg) scale(1.14); }
   .an-pin.an-active { outline: 3px solid rgba(0,0,0,.18); }
+  .an-pin:focus-visible { outline: 3px solid #4f46e5; outline-offset: 2px; }
+  #__an_overlay [tabindex]:focus-visible, .an-block-tab:focus-visible {
+    outline: 3px solid #4f46e5; outline-offset: 2px; }
 
   .an-avatar { width:22px; height:22px; border-radius:50%; flex:none;
     display:inline-flex; align-items:center; justify-content:center;
@@ -646,6 +689,22 @@
     border-radius:6px; flex:none; }
   .an-toast .an-taction:hover { background:rgba(165,180,252,.14); }
 
+  /* ---- unanchored highlight pill ------------------------------------------ */
+  .an-unanchored-pill { position:absolute; left:16px; z-index:2147483110;
+    display:flex; align-items:center; gap:7px; max-width:280px;
+    background:#78350f; color:#fde68a; font:500 11.5px/1.35 var(--an-font);
+    padding:7px 11px; border-radius:10px; box-shadow: var(--an-shadow-md);
+    border:1px solid rgba(255,255,255,.14); cursor:pointer; }
+  .an-unanchored-pill svg { width:14px; height:14px; flex:none; }
+
+  /* ---- persistent "storage unavailable" banner --------------------------- */
+  #__an_unsaved { position:fixed; top:14px; left:50%; transform:translateX(-50%);
+    z-index:2147483510; display:flex; align-items:center; gap:9px;
+    background:#7f1d1d; color:#ffe4e6; font:500 12.5px var(--an-font);
+    padding:10px 14px; border-radius:12px; box-shadow: var(--an-shadow-md);
+    border:1px solid rgba(255,255,255,.14); max-width:min(460px, 92vw);
+    animation: an-toast-in .25s cubic-bezier(.34,1.3,.64,1); }
+
   /* ---- section (+) and margin bubbles ------------------------------------ */
   #__an_plus { position:fixed; z-index:2147483120; width:30px; height:30px;
     border-radius:50%; background: var(--an-surface);
@@ -953,15 +1012,100 @@
     if (pinLayer) pinLayer.innerHTML = "";
   }
 
+  // Anchor boxes at last render, so layout observers can tell whether a full
+  // re-render is actually needed (cheap to check, avoids re-render churn).
+  var anchorCache = {};
+  function rememberAnchor(c, box) {
+    anchorCache[c.id] = { x: box.x, y: box.y, w: box.w, h: box.h };
+  }
+  function anchorsMoved() {
+    for (var i = 0; i < state.comments.length; i++) {
+      var c = state.comments[i];
+      if (c.resolved && !showResolvedVisuals()) continue;
+      if (c.type === "highlight" || !c.geom || !c.geom.selector) continue; // marks reflow with the DOM
+      var ae = resolveAnchorEl(c.geom.selector);
+      if (!ae) continue;
+      var prev = anchorCache[c.id];
+      var b = docBox(ae);
+      if (!prev || Math.abs(prev.x - b.x) > 0.5 || Math.abs(prev.y - b.y) > 0.5 ||
+        Math.abs(prev.w - b.w) > 0.5 || Math.abs(prev.h - b.h) > 0.5) return true;
+    }
+    return false;
+  }
+
   function showResolvedVisuals() { return state.filter !== "open"; }
+
+  // Make a DOM or SVG marker keyboard-operable: focusable, announced by name,
+  // and activated with Enter / Space (mirrors the mouse click). Returns nothing.
+  function makeMarkerInteractive(node, c, idx, verb) {
+    node.setAttribute("role", "button");
+    node.setAttribute("tabindex", "0");
+    node.setAttribute("aria-label", (verb || "Annotation") + " comment #" + idx +
+      ": " + (c.text || "no text").slice(0, 120));
+    node.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter" || ev.key === " " || ev.key === "Spacebar") {
+        ev.preventDefault(); ev.stopPropagation(); focusComment(c.id, true);
+      }
+    });
+  }
+
+  // Count full occurrences of a needle in the page text.
+  function countMatches(needle) {
+    var nodes = getTextNodes(), full = "";
+    for (var i = 0; i < nodes.length; i++) full += nodes[i].nodeValue;
+    var count = 0, at = 0;
+    while (needle && (at = full.indexOf(needle, at)) >= 0) { count++; at += needle.length; }
+    return count;
+  }
+
+  // Decide whether a saved quote can be highlighted honestly:
+  //  - the saved prefix+exact+suffix context occurs exactly once, or
+  //  - the context is gone but the exact text occurs exactly once
+  //    (the rangeFromQuote fallback is then unambiguous),
+  // otherwise the anchor is ambiguous (2+ candidates) or lost (0).
+  function resolveHighlightAnchor(q) {
+    if (countMatches((q.prefix || "") + q.exact + (q.suffix || "")) === 1) return { status: "ok" };
+    var exactCount = countMatches(q.exact);
+    if (exactCount === 1) return { status: "ok" };
+    return { status: exactCount === 0 ? "lost" : "ambiguous" };
+  }
+
+  // Explicit "can't find your text" marker instead of a silent guess: shown
+  // when a highlight's quote has disappeared (0 matches) or been duplicated
+  // (2+ matches) since it was written. `slot` is the pre-computed stack index
+  // among unanchored comments (see renderAll) so positioning stays O(1).
+  function unanchoredPill(c, slot) {
+    var idx = state.comments.indexOf(c) + 1;
+    var pill = el("div", { class: "an-unanchored-pill", title: "The quoted text for comment #" + idx +
+      " can’t be found (or appears multiple times), so it isn’t highlighted. Open the comment for details." },
+      [el("span", { html: ICONS.alert }), el("span", { text: "Moved or duplicated — #" + idx })]);
+    pill.style.top = (16 + slot * 34 + window.scrollY) + "px";
+    pill.style.left = "16px";
+    pill.style.pointerEvents = "auto";
+    pill.addEventListener("click", function (ev) { ev.stopPropagation(); focusComment(c.id, true); });
+    pinLayer.appendChild(pill);
+  }
 
   function renderAll() {
     ensureOverlay();
     clearVisuals();
+    anchorCache = {};
     sizeOverlay();
+    // Running stack slots so the floating "unanchored" / "anchor missing"
+    // markers don't each scan the whole comment list to find their offset.
+    var unanchoredSlot = 0, missingSlot = 0;
     state.comments.forEach(function (c) {
       if (c.resolved && !showResolvedVisuals()) return;
       if (c.type === "highlight" && c.anchor) {
+        var status = resolveHighlightAnchor(c.anchor).status;
+        if (status !== "ok") {
+          // "lost" = the quoted text vanished; "ambiguous" = it can no longer
+          // identify one intended target. Surface it — never guess a copy.
+          c.__unanchored = status;
+          unanchoredPill(c, unanchoredSlot++);
+          return;
+        }
+        c.__unanchored = false;
         var r = rangeFromQuote(c.anchor);
         if (r) {
           var marks = paintRange(r, c.color, c.id);
@@ -973,9 +1117,11 @@
           });
         }
       } else if (c.geom && (c.type === "shape" || c.type === "pen")) {
-        renderGeom(c);
+        renderGeom(c, missingSlot);
+        if (c.__anchorMissing) missingSlot++;
       } else if (c.type === "pin" && c.geom) {
-        renderPin(c);
+        renderPin(c, missingSlot);
+        if (c.__anchorMissing) missingSlot++;
       } else if (c.type === "block" && c.geom) {
         renderBlock(c);
       }
@@ -987,6 +1133,7 @@
     var anchorEl = c.geom.selector ? resolveAnchorEl(c.geom.selector) : null;
     if (!anchorEl) return;
     var box = docBox(anchorEl);
+    rememberAnchor(c, box);
     var idx = state.comments.indexOf(c) + 1;
     var tab = el("div", { class: "an-block-tab" + (c.id === state.activeId ? " an-active" : "") }, [
       el("span", { html: ICONS.bubble }), el("span", { text: String(idx) }),
@@ -999,16 +1146,24 @@
     tab.style.top = (box.y + 2) + "px";
     tab.title = c.text || "";
     tab.addEventListener("click", function (ev) { ev.stopPropagation(); focusComment(c.id, true); });
+    makeMarkerInteractive(tab, c, idx, "Section");
     pinLayer.appendChild(tab);
   }
 
   function viewportMismatch(g) {
     return g && g.vw && Math.abs(g.vw - window.innerWidth) > 200;
   }
-  function renderGeom(c) {
-    var anchorEl = c.geom.selector ? resolveAnchorEl(c.geom.selector) : document.body;
-    if (!anchorEl) anchorEl = document.body;
+  function renderGeom(c, missingSlot) {
+    // A shape only makes sense relative to its anchor element. If that
+    // element no longer exists we must NOT silently redraw the shape over
+    // <body> — that pretends the annotation still lives where it was meant
+    // to. Draw only when the anchor can be resolved; otherwise surface a
+    // floating "anchor missing" badge the user can open to reposition or delete.
+    var anchorEl = c.geom.selector ? resolveAnchorEl(c.geom.selector) : null;
+    if (!anchorEl) { c.__anchorMissing = true; renderMissingAnchor(c, missingSlot); return; }
+    c.__anchorMissing = false;
     var box = docBox(anchorEl);
+    rememberAnchor(c, box);
     var g = c.geom;
     var node;
     if (g.kind === "rect") {
@@ -1059,13 +1214,41 @@
     badge.style.cursor = "pointer";
     badge.style.pointerEvents = "all";
     badge.addEventListener("click", function (ev) { ev.stopPropagation(); focusComment(c.id, true); });
+    makeMarkerInteractive(badge, c, idx, "Shape");
     overlay.appendChild(badge);
   }
 
-  function renderPin(c) {
-    var anchorEl = c.geom.selector ? resolveAnchorEl(c.geom.selector) : document.body;
+  // Floating badge shown when a shape/pin anchor element no longer exists.
+  // Positioned at a stable page offset (never over <body>, which would imply
+  // the annotation still has a valid position).
+  function renderMissingAnchor(c, missingSlot) {
+    var idx = state.comments.indexOf(c) + 1;
+    var badgeR = 13;
+    var bx = 40 + missingSlot * 36;
+    var by = 40 + window.scrollY;
+    var badge = svgEl("g", {});
+    var circ = svgEl("circle", { cx: bx, cy: by, r: badgeR, fill: "#f59e0b", stroke: "#fff", "stroke-width": 2, class: "an-badge-circle" });
+    var title = svgEl("title");
+    title.textContent = "The element this comment points to no longer exists — it is not drawn in place.";
+    circ.setAttribute("title", "Anchor element missing");
+    var txt = svgEl("text", { x: bx, y: by + 4, "text-anchor": "middle", fill: "#fff",
+      "font-size": "11", "font-weight": "700", "font-family": "Inter, sans-serif" });
+    txt.textContent = idx;
+    badge.appendChild(title); badge.appendChild(circ); badge.appendChild(txt);
+    badge.style.cursor = "pointer";
+    badge.style.pointerEvents = "all";
+    badge.addEventListener("click", function (ev) { ev.stopPropagation(); focusComment(c.id, true); });
+    makeMarkerInteractive(badge, c, idx, "Annotation (anchor missing)");
+    overlay.appendChild(badge);
+  }
+
+  function renderPin(c, missingSlot) {
+    var anchorEl = c.geom.selector ? resolveAnchorEl(c.geom.selector) : null;
+    if (!anchorEl && c.geom.selector !== "body") { c.__anchorMissing = true; renderMissingAnchor(c, missingSlot); return; }
     if (!anchorEl) anchorEl = document.body;
+    c.__anchorMissing = false;
     var box = docBox(anchorEl);
+    rememberAnchor(c, box);
     var idx = state.comments.indexOf(c) + 1;
     var pin = el("div", { class: "an-pin" + (c.id === state.activeId ? " an-active" : ""), title: c.text || "" },
       [el("span", { text: String(idx) })]);
@@ -1074,6 +1257,7 @@
     pin.style.top = (box.y + c.geom.y * box.h) + "px";
     pin.style.pointerEvents = "auto";
     pin.addEventListener("click", function (ev) { ev.stopPropagation(); focusComment(c.id, true); });
+    makeMarkerInteractive(pin, c, idx, "Pin");
     pinLayer.appendChild(pin);
   }
 
@@ -1509,10 +1693,28 @@
     });
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { setTimeout(renderAll, 60); });
     window.addEventListener("load", function () { setTimeout(renderAll, 120); });
-    // Resize overlay when page content grows (lazy images, dynamic content)
+    // Keep overlays aligned after layout changes (lazy images, dynamic
+    // content, nested scroll containers, SPA route swaps). Coalesced to one
+    // pass per frame; a full re-render happens only when an annotation anchor
+    // actually moved, so idle layout churn never restarts markers mid-animation.
     if (typeof ResizeObserver !== "undefined") {
-      var _ro = new ResizeObserver(function () { if (overlay) sizeOverlay(); });
+      var _roRaf = 0;
+      var _scRaf = 0;
+      function relayout() {
+        if (!overlay || drawing || pendingDraft) return;
+        sizeOverlay();
+        if (anchorsMoved()) renderAll();
+      }
+      var _ro = new ResizeObserver(function () {
+        if (_roRaf) return;
+        _roRaf = requestAnimationFrame(function () { _roRaf = 0; relayout(); });
+      });
       _ro.observe(document.body);
+      // capture:true so scrolls inside nested scrollable containers count too
+      document.addEventListener("scroll", function () {
+        if (_scRaf) return;
+        _scRaf = requestAnimationFrame(function () { _scRaf = 0; relayout(); });
+      }, { passive: true, capture: true });
     }
   }
 
@@ -1954,41 +2156,75 @@
     inp.click();
   }
 
+  var MAX_EXPORT_COMMENTS = 5000;
+  function isFiniteNum(v) { return typeof v === "number" && isFinite(v); }
   function isValidGeom(g) {
-    if (!g || typeof g.kind !== "string") return false;
+    if (!g || typeof g !== "object" || typeof g.kind !== "string") return false;
     if (g.kind === "pin" || g.kind === "rect" || g.kind === "circle")
-      return typeof g.x === "number" && isFinite(g.x) && typeof g.y === "number" && isFinite(g.y);
+      return isFiniteNum(g.x) && isFiniteNum(g.y) && (g.w === undefined || isFiniteNum(g.w)) && (g.h === undefined || isFiniteNum(g.h));
     if (g.kind === "pen")
       return Array.isArray(g.points) && g.points.length >= 2 && g.points.length <= 10000 &&
-        g.points.every(function (p) { return Array.isArray(p) && p.length === 2 && isFinite(p[0]) && isFinite(p[1]); });
+        g.points.every(function (p) { return Array.isArray(p) && p.length === 2 && isFiniteNum(p[0]) && isFiniteNum(p[1]); });
     if (g.kind === "block") return typeof g.selector === "string" && g.selector.length < 4096;
+    return false; // unknown geometry kinds are rejected, not guessed at
+  }
+  var VALID_TYPES = { highlight: 1, shape: 1, pin: 1, pen: 1, note: 1, block: 1 };
+  function isValidAnchor(a) {
+    if (typeof a.exact !== "string") return false;
+    if (a.exact.length > 10000) return false;
+    return (typeof a.prefix === "string") && (typeof a.suffix === "string");
+  }
+  function isValidReply(r) {
+    return r && typeof r.id === "string" && r.id.length < 128 &&
+      typeof r.author === "string" && typeof r.text === "string" && r.text.length <= 5000 &&
+      typeof r.createdAt === "string";
+  }
+  function isValidType(t) { return typeof t === "string" && VALID_TYPES[t] === 1; }
+  // Single schema gate for anything read back from storage or imported from a
+  // file. Returns true for well-formed records only.
+  function isValidComment(c) {
+    if (!c || typeof c !== "object") return false;
+    if (typeof c.id !== "string" || !c.id || c.id.length > 128) return false;
+    if (!isValidType(c.type)) return false;
+    if (typeof c.author !== "string" || typeof c.text !== "string" || c.text.length > 5000) return false;
+    if (typeof c.color !== "string") return false;
+    if (c.anchor !== null && c.anchor !== undefined && !isValidAnchor(c.anchor)) return false;
+    if (c.geom !== null && c.geom !== undefined && !isValidGeom(c.geom)) return false;
+    if (!Array.isArray(c.replies) || c.replies.length > 500 ||
+        !c.replies.every(isValidReply)) return false;
     return true;
   }
   function importComments(data) {
     var incoming = data && Array.isArray(data.comments) ? data.comments : null;
     if (!incoming) { toast("No comments found in that file", { kind: "error" }); return; }
+    if (incoming.length > MAX_EXPORT_COMMENTS) {
+      toast("That file has too many comments to import", { kind: "error" }); return;
+    }
     // Warn if the export came from a different page
     if (data.page && data.page !== PAGE)
       toast("These comments were from a different page — positions may not match.", { kind: "info", duration: 6000 });
     var existing = {};
     state.comments.forEach(function (c) { existing[c.id] = true; });
-    var prepared = [];
+    var prepared = [], skipped = 0, seenIds = {};
     incoming.forEach(function (c) {
-      if (!c || (!c.text && !c.anchor && !c.geom)) return;
-      if (c.geom && !isValidGeom(c.geom)) return;  // reject malformed geometry
-      if (c.anchor && c.anchor.exact && String(c.anchor.exact).length > 10000) return;
+      if (!isValidComment(c)) { skipped++; return; }        // malformed record — drop
+      if (seenIds[c.id]) { skipped++; return; }            // duplicate ID within the batch
+      if (existing[c.id]) { skipped++; return; }           // already imported to this project
+      seenIds[c.id] = true;
       var copy = JSON.parse(JSON.stringify(c));
       copy.page = PAGE;
-      if (!copy.id || existing[copy.id]) copy.id = uid();
-      if (!Array.isArray(copy.replies)) copy.replies = [];
       prepared.push(copy);
     });
-    if (!prepared.length) { toast("Nothing new to import", { kind: "info" }); return; }
+    if (!prepared.length) {
+      toast(skipped ? "Nothing new to import (" + skipped + " invalid or already present)" : "Nothing new to import", { kind: skipped ? "error" : "info" });
+      return;
+    }
     var d = dbRead();
     d.comments = d.comments.concat(prepared);
     dbWrite(d);
     load();
-    toast("Imported " + prepared.length + " comment" + (prepared.length === 1 ? "" : "s"), { kind: "success" });
+    var ok = prepared.length + (skipped ? " (" + skipped + " skipped)" : "");
+    toast("Imported " + ok + " comment" + (prepared.length === 1 ? "" : "s"), { kind: "success" });
   }
 
   function copyLink(id) {
@@ -1999,30 +2235,45 @@
     else prompt("Copy link:", link);
   }
 
-  // delete with undo — remove locally now, persist when the toast expires
+  // delete with undo — persist the deletion immediately (so a reload in the
+  // undo window can't resurrect it) and let Undo restore the record.
   var pendingDeletes = {};
   function deleteComment(c) {
     state.comments = state.comments.filter(function (x) { return x.id !== c.id; });
     if (state.activeId === c.id) state.activeId = null;
     pendingDeletes[c.id] = c;
+    removeComment(c.id); // persist the deletion now
     renderAll(); renderPanel();
     toast("Comment deleted", {
       kind: "info", action: "Undo", duration: 5000,
       onAction: function () {
         delete pendingDeletes[c.id];
-        // Re-insert in chronological order so concurrent deletes don't break positions
-        var inserted = false;
-        for (var i = 0; i < state.comments.length; i++) {
-          if (state.comments[i].createdAt > c.createdAt) {
-            state.comments.splice(i, 0, c); inserted = true; break;
+        var restored = Object.assign({}, c, { replies: (c.replies || []).slice() });
+        // Only re-show the comment if we're still on the page it belongs to;
+        // after an SPA route change it must be restored to storage without
+        // leaking into the current route's list.
+        if (restored.page === PAGE) {
+          // Re-insert in chronological order so concurrent deletes don't break positions
+          var inserted = false;
+          for (var i = 0; i < state.comments.length; i++) {
+            if (state.comments[i].createdAt > c.createdAt) {
+              state.comments.splice(i, 0, restored); inserted = true; break;
+            }
           }
+          if (!inserted) state.comments.push(restored);
         }
-        if (!inserted) state.comments.push(c);
+        // Idempotent restore: another path (cross-tab sync, a re-import) may
+        // have already put this id back in storage during the undo window —
+        // never write a second copy.
+        var d = dbRead();
+        if (!d.comments.some(function (x) { return x.id === restored.id; })) {
+          d.comments.push(restored);
+          dbWrite(d);
+        }
         renderAll(); renderPanel();
       },
       onExpire: function () {
         delete pendingDeletes[c.id];
-        removeComment(c.id);
       },
     });
   }
@@ -2225,6 +2476,15 @@
   // ==========================================================================
   var firstLoad = true;
   function load() {
+    // SPA navigation: when the host pushes a new route and calls refresh(),
+    // recompute a non-explicit page key so each route keeps its own comments.
+    // An in-flight draft from the previous page is discarded.
+    var newKey = currentPageKey();
+    if (newKey !== PAGE) {
+      if (pendingDraft || drawing) { drawing = null; cancelDraft(); }
+      PAGE = newKey;
+      state.activeId = null;
+    }
     if (pendingDraft || drawing) return;
     state.comments = pageComments().filter(function (c) { return !pendingDeletes[c.id]; });
     renderAll();
@@ -2279,6 +2539,16 @@
     toast: toast,
     export: function () { exportComments(); },
     import: function () { pickImportFile(); },
+    // Test / automation hooks (not part of the documented API)
+    _annotateImportForTest: function (data) { importComments(data); },
+    _annotateOpenImportForTest: function () { pickImportFile(); },
+    _annotateCreateForTest: function (draft) {
+      var c = createComment(draft);
+      state.comments.push(c);
+      renderAll(); renderPanel();
+      return c;
+    },
+    _annotateExportPayloadForTest: function () { return buildExportPayload(); },
     clear: function () {
       var d = dbRead();
       d.comments = d.comments.filter(function (c) { return c.page !== PAGE; });

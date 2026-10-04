@@ -1,6 +1,10 @@
 node_modules/
 .DS_Store
 *.log
+.env
+.env.*
+!.env.example
+opencode.json
 .cache/
 dist/
 playwright-report/

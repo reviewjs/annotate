@@ -17,7 +17,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Hard gate: the site only deploys when the chromium suite is green.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+      - name: Run tests
+        run: npx playwright test --project=chromium
+
   deploy:
+    needs: test
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
