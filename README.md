@@ -5,9 +5,9 @@
 draw rectangles & circles, drop pins, sketch freehand and leave threaded
 comments — directly on top of your live page.
 
-No backend. No database. No tracking. Comments live in the visitor's own
-browser (`localStorage`) and can be **downloaded to / imported from a portable
-JSON file** to share with your team.
+By default, comments live in the visitor's own browser (`localStorage`) and
+can be **downloaded to / imported from a portable JSON file**. You can also
+configure your own HTTP endpoint for an explicit **Send feedback** action.
 
 ```html
 <script src="https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js" defer></script>
@@ -22,14 +22,13 @@ That single line is the whole installation.
 - **One `<script>` tag.** No build step, no framework, no signup.
 - **Works everywhere.** Plain HTML, React, Vue, Svelte, WordPress, Webflow,
   Shopify, static sites — anything that renders HTML in a browser.
-- **Local-first & private.** Every comment is stored on the reviewer's device.
-  Nothing is sent anywhere.
+- **Local-first & private.** Comments stay on the reviewer's device until they
+  explicitly export or send feedback to an endpoint you configure.
 - **Portable.** Reviewers export their feedback as JSON and send it to you; you
   import it with one click and see every note in place.
 - **Polished UI.** A floating toolbar, a Figma-style comments panel, light/dark
   themes that auto-adapt to your page, and full keyboard shortcuts.
-- **Tiny & dependency-free.** ~110 KB of vanilla JavaScript (unminified, zero
-  dependencies) — minify it for production to cut that to a few tens of KB.
+- **Dependency-free.** Vanilla JavaScript with no runtime dependencies.
 
 ---
 
@@ -91,7 +90,9 @@ Configure with `data-` attributes on the script tag — all optional:
   data-position="bottom-right"
   data-start-open="true"
   data-note="Focus on the hero copy and pricing — flag anything off-brand."
-  data-share-email="reviews@example.com"
+  data-spa="true"
+  data-post-url="https://feedback.example.com/feedback"
+  data-share-email="https://github.com/org/repo/issues/new?title=Review%20{page}&amp;body={summary}"
   defer
 ></script>
 ```
@@ -106,48 +107,55 @@ Configure with `data-` attributes on the script tag — all optional:
 | `data-blocks` | sensible default | CSS selector for "section note" (+) targets. |
 | `data-start-open` | `false` | Set to `true` to show the review toolbar immediately instead of the collapsed Review pill. |
 | `data-note` | — | Author's note to reviewers — what should be reviewed. Shown when they start and atop the comments panel. |
-| `data-share-email` | — | Where reviewers send comments: an email address, or a Slack / Hangout link. Adds a **Share** button. |
+| `data-spa` | `false` | Watch `pushState`, `replaceState`, and `popstate` for page changes. |
+| `data-post-url` | — | URL that receives an explicit HTTP POST of the current page's export JSON. Adds **Send feedback**. |
+| `data-share-email` | — | Email address or URL template for **Share**. `{page}`, `{count}`, and `{summary}` become URL-encoded values for a prefilled GitHub, GitLab, Jira, or other issue URL. |
 
-Prefer JS config? Set `window.AnnotateConfig` **before** the script loads:
+For programmatic setup, import the ES module and call `init(config)`:
 
-```html
-<script>
-  window.AnnotateConfig = {
-    project: "marketing-site",
-    accent: "#6d28d9",
-    theme: "auto",
-    note: "Focus on the hero copy and pricing — flag anything off-brand.",
-    shareEmail: "reviews@example.com",
-  };
-</script>
-<script src="https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js" defer></script>
+```bash
+npm install @reviewjs/annotate
 ```
+
+```js
+import Annotate from '@reviewjs/annotate';
+
+Annotate.init({
+  project: 'marketing-site',
+  accent: '#6d28d9',
+  spa: true,
+  postUrl: '/feedback',
+});
+// Call Annotate.destroy() when unmounting or during hot reload.
+```
+
+The classic script still supports `window.AnnotateConfig` set before it loads.
+For a script injected after page load, call `window.Annotate.init(config)`.
+`init()` can be called again after `destroy()` without leaving listeners behind.
+TypeScript declarations are included in the package.
 
 ---
 
 ## Framework integration
 
-reviewjs is a plain browser script, so the goal everywhere is the same:
-**load `annotate.js` once, after the page has rendered.** Below are copy-paste
-recipes.
+For a bundler, install `@reviewjs/annotate`, call `init()` after mount, and
+call `destroy()` on unmount. Use `spa: true` when your router changes paths
+through the History API. Dynamic content is watched and re-anchored after it
+renders. The classic script remains available for static pages.
 
 ### ⚛️ React (and Next.js)
 
-Load it once at the app root with a `useEffect`:
+Mount it once at the app root with a `useEffect`:
 
 ```jsx
-// components/Annotate.jsx
+// components/FeedbackLayer.jsx
 import { useEffect } from "react";
+import Annotate from "@reviewjs/annotate";
 
-export default function Annotate() {
+export default function FeedbackLayer() {
   useEffect(() => {
-    if (document.getElementById("annotate-js")) return;
-    window.AnnotateConfig = { project: "my-react-app", accent: "#6d28d9" };
-    const s = document.createElement("script");
-    s.id = "annotate-js";
-    s.src = "https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js";
-    s.defer = true;
-    document.body.appendChild(s);
+    Annotate.init({ project: "my-react-app", accent: "#6d28d9", spa: true });
+    return () => Annotate.destroy();
   }, []);
   return null;
 }
@@ -155,59 +163,37 @@ export default function Annotate() {
 
 ```jsx
 // App.jsx
-import Annotate from "./components/Annotate";
+import FeedbackLayer from "./components/FeedbackLayer";
 
 export default function App() {
   return (
     <>
-      <Annotate />
+      <FeedbackLayer />
       {/* your app */}
     </>
   );
 }
 ```
 
-**Next.js (App Router)** — drop the `<Script>` into `app/layout.js`:
-
-```jsx
-import Script from "next/script";
-
-export default function RootLayout({ children }) {
-  return (
-    <html>
-      <body>
-        {children}
-        <Script
-          src="https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js"
-          strategy="afterInteractive"
-        />
-      </body>
-    </html>
-  );
-}
-```
+**Next.js (App Router):** mark `FeedbackLayer` as a client component with
+`"use client";` at the top, then render it inside `app/layout.jsx`.
 
 ### 🟩 Vue 3
 
 ```vue
 <!-- App.vue -->
 <script setup>
-import { onMounted } from "vue";
+import { onMounted, onUnmounted } from "vue";
+import Annotate from "@reviewjs/annotate";
 
 onMounted(() => {
-  if (document.getElementById("annotate-js")) return;
-  window.AnnotateConfig = { project: "my-vue-app", accent: "#10b981" };
-  const s = document.createElement("script");
-  s.id = "annotate-js";
-  s.src = "https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js";
-  s.defer = true;
-  document.body.appendChild(s);
+  Annotate.init({ project: "my-vue-app", accent: "#10b981", spa: true });
 });
+onUnmounted(() => Annotate.destroy());
 </script>
 ```
 
-Or, even simpler, add the `<script>` tag straight into `public/index.html`
-(Vue CLI) / `index.html` (Vite) before `</body>`.
+For a static Vue page, the classic `<script>` tag also works in `index.html`.
 
 ### 🧩 WordPress
 
@@ -242,11 +228,10 @@ add_action( 'wp_enqueue_scripts', 'reviewjs_enqueue' );
 <!-- src/routes/+layout.svelte -->
 <script>
   import { onMount } from "svelte";
+  import Annotate from "@reviewjs/annotate";
   onMount(() => {
-    const s = document.createElement("script");
-    s.src = "https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js";
-    s.defer = true;
-    document.body.appendChild(s);
+    Annotate.init({ spa: true });
+    return () => Annotate.destroy();
   });
 </script>
 
@@ -275,7 +260,7 @@ Paste before `</body>` (or into the platform's "custom code / footer" field):
 
 ## Sharing comments
 
-Because everything is local, sharing is an explicit, privacy-friendly action:
+Sharing is an explicit action:
 
 1. A reviewer opens the **Comments panel** (toolbar list icon or press `A`).
 2. They click **Download** (⬇) to save a `annotate-<page>-<date>.json` file.
@@ -288,11 +273,54 @@ complete, import-compatible JSON payload to the clipboard.
 
 You can also drive this from code (see the API below).
 
+### Send feedback to your server
+
+Set `data-post-url` on the classic script or `postUrl` in `init(config)`.
+Reviewers will see a **Send feedback** button. It POSTs the same JSON export
+to your endpoint with `Content-Type: application/json`. A successful response
+must have a 2xx status. Sending does not delete the browser's local comments.
+
+```html
+<script src="/annotate.js" data-post-url="https://feedback.example.com/feedback" defer></script>
+```
+
+A dependency-free Node receiver is in
+[`examples/feedback-server.cjs`](./examples/feedback-server.cjs). For a local
+demo, run:
+
+```bash
+ALLOWED_ORIGIN=http://localhost:4200 FEEDBACK_DIR=./feedback node examples/feedback-server.cjs
+```
+
+It listens on port `8787` by default (`PORT` overrides this), accepts
+`POST /feedback`, caps each JSON body at 1 MiB, and saves an individual JSON
+file per submission. Use `data-post-url="http://localhost:8787/feedback"` on a
+site served from `http://localhost:4200`. Set `ALLOWED_ORIGIN` to that site's
+origin for cross-origin requests. Before exposing a receiver publicly, add
+your site's authentication and rate limits; the example has no login.
+
+### Prefill an issue
+
+`data-share-email` also accepts an issue creation URL. The values of
+`{page}`, `{count}`, and `{summary}` are URL encoded before substitution.
+For example:
+
+```html
+<script src="/annotate.js"
+  data-share-email="https://github.com/org/repo/issues/new?title=Review%20{page}&amp;body={summary}"
+  defer></script>
+```
+
+The issue link contains a short comment summary. Download or send the full
+JSON when teammates need to import annotations and their anchors.
+
 ---
 
 ## JavaScript API
 
-A global `window.Annotate` is available once the script loads:
+A global `window.Annotate` is available once the classic script loads. The
+ES module exports the same controller as default, plus named `init` and
+`destroy` functions. The module does not start until `init(config)` is called.
 
 ```js
 Annotate.open();              // show the review layer and open the comments panel
@@ -305,6 +333,10 @@ Annotate.comments();          // → array of comment objects for this page
 Annotate.focus(id);           // scroll to & highlight a comment
 Annotate.export();            // trigger the JSON download
 Annotate.import();            // open the file picker
+await Annotate.submit();      // POST the JSON export to postUrl
+Annotate.refresh();           // manually re-read the current page when spa is off
+Annotate.destroy();           // remove UI, observers, and event listeners
+Annotate.init({ spa: true });  // start again with programmatic settings
 Annotate.clear();             // delete all comments on this page (local)
 Annotate.toast("Saved!");     // show a toast
 Annotate.version;             // "1.3.0"

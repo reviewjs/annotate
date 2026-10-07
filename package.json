@@ -1,21 +1,53 @@
 {
   "name": "@reviewjs/annotate",
   "version": "1.3.0",
-  "description": "A drop-in visual review & annotation layer for any website. Local-only, zero backend. Highlight text, draw shapes, drop pins and leave threaded comments — then download them as JSON.",
+  "description": "A drop-in visual review and annotation layer for any website. Store comments locally, export JSON, or send feedback to your own endpoint.",
   "main": "annotate.js",
+  "module": "annotate.mjs",
+  "types": "annotate.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./annotate.d.mts",
+        "default": "./annotate.mjs"
+      },
+      "require": {
+        "types": "./annotate.d.cts",
+        "default": "./annotate.js"
+      },
+      "default": "./annotate.js"
+    },
+    "./annotate.js": {
+      "types": "./annotate.d.cts",
+      "default": "./annotate.js"
+    },
+    "./annotate.mjs": {
+      "types": "./annotate.d.mts",
+      "default": "./annotate.mjs"
+    },
+    "./package.json": "./package.json"
+  },
   "unpkg": "annotate.js",
   "jsdelivr": "annotate.js",
   "files": [
     "annotate.js",
+    "annotate.mjs",
+    "annotate.d.ts",
+    "annotate.d.mts",
+    "annotate.d.cts",
+    "examples/feedback-server.cjs",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
+    "build": "node scripts/build.mjs",
     "start": "npx serve . --listen 4200 --no-clipboard",
     "demo": "npx serve . --listen 4200 --no-clipboard",
-    "pages:build": "rm -rf _site && mkdir -p _site && cp index.html annotate.js logo.png og-image.png .nojekyll CNAME LICENSE README.md package.json _site/ && cp -R examples _site/examples",
+    "pages:build": "npm run build && rm -rf _site && mkdir -p _site && cp index.html annotate.js annotate.mjs annotate.d.ts annotate.d.mts annotate.d.cts logo.png og-image.png .nojekyll CNAME LICENSE README.md package.json _site/ && cp -R examples _site/examples",
     "deploy:pages": "npm run pages:build",
+    "prepack": "npm run build",
     "publish:npm": "npm publish --access public",
+    "test:server": "node --test scripts/tests/feedback-server.test.cjs",
     "test": "playwright test",
     "test:chromium": "playwright test --project=chromium",
     "test:mobile": "playwright test --project=mobile-chrome --project=mobile-safari",

@@ -4,18 +4,18 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>annotate.js — turn any website into a review board</title>
-<meta name="description" content="A drop-in visual review layer for any website. Highlight, draw, pin and comment right on the live page. Open source, local-first, one script tag. No backend, no accounts." />
+<meta name="description" content="A drop-in visual review layer for any website. Highlight, draw, pin and comment right on the live page. Open source, local-first, one script tag. Optional feedback endpoint." />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://reviewjs.com/" />
 <meta property="og:title" content="Annotate.js — turn any website into a review board" />
-<meta property="og:description" content="A drop-in visual review layer for any website. Highlight, draw, pin and comment right on the live page. Open source, local-first, one script tag. No backend, no accounts." />
+<meta property="og:description" content="A drop-in visual review layer for any website. Highlight, draw, pin and comment right on the live page. Open source, local-first, one script tag. Optional feedback endpoint." />
 <meta property="og:image" content="https://reviewjs.github.io/annotate/og-image.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
 <meta property="og:image:alt" content="Annotate.js landing page preview" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="Annotate.js — turn any website into a review board" />
-<meta name="twitter:description" content="A drop-in visual review layer for any website. Highlight, draw, pin and comment right on the live page. Open source, local-first, one script tag. No backend, no accounts." />
+<meta name="twitter:description" content="A drop-in visual review layer for any website. Highlight, draw, pin and comment right on the live page. Open source, local-first, one script tag. Optional feedback endpoint." />
 <meta name="twitter:image" content="https://reviewjs.github.io/annotate/og-image.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -302,6 +302,9 @@
   .final h2{font-size:46px;line-height:1.08;letter-spacing:0;font-weight:800;color:var(--ink);margin:18px auto 0;max-width:680px;text-wrap:balance}
   .final p{font-size:18px;line-height:1.65;color:var(--muted);margin:18px auto 0;max-width:520px}
   .final .codepill{max-width:620px;margin:34px auto 0;text-align:left}
+  .final .post-setting{display:block;max-width:620px;margin:26px auto 0;text-align:left;font-size:14px;font-weight:700;color:var(--ink)}
+  .final .post-setting input{display:block;width:100%;margin-top:8px;padding:12px 14px;border:1px solid var(--line-3);border-radius:8px;background:var(--card);color:var(--ink);font:inherit;font-weight:400}
+  .final .post-setting input:focus{outline:2px solid var(--violet);outline-offset:2px}
   .final .actions{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:12px;margin-top:24px}
   .final .btn-outline{background:var(--card);color:var(--ink);border:1px solid var(--line-3)}
   .final .btn-outline:hover{background:var(--bg-2);border-color:#cfc4b0}
@@ -533,7 +536,7 @@
       <div class="why-side reveal">
         <div class="eyebrow">02 — Why reviewjs</div>
         <h2 class="sh">The right amount of tool</h2>
-        <p class="section-lead">No backend to stand up. Nothing to get past security review. It lives in the browser, exports JSON, and gets out of the way.</p>
+        <p class="section-lead">It lives in the browser and exports JSON. Add your own feedback endpoint when you want reviewers to send comments directly.</p>
         <div class="stat-grid">
           <div class="stat"><div class="v">~40KB</div><div class="l">Minified + gzipped</div></div>
           <div class="stat"><div class="v">0</div><div class="l">Dependencies</div></div>
@@ -544,10 +547,10 @@
       <div class="reason-grid">
         <div class="reason reveal"><span class="ric"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 18l6-6-6-6"/><path d="M8 6l-6 6 6 6"/></svg></span><h3>One script tag</h3><p>No build step, no framework, no signup. Paste a line, reload, review.</p></div>
         <div class="reason reveal"><span class="ric"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z"/></svg></span><h3>Works everywhere</h3><p>Plain HTML, React, Vue, Svelte, WordPress, Webflow, Shopify, static sites.</p></div>
-        <div class="reason reveal"><span class="ric"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></span><h3>Local-first &amp; private</h3><p>Every comment is stored on the reviewer’s device. Nothing is sent anywhere.</p></div>
+        <div class="reason reveal"><span class="ric"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></span><h3>Local-first &amp; private</h3><p>Comments stay on the reviewer’s device until they export or send feedback.</p></div>
         <div class="reason reveal"><span class="ric"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg></span><h3>Portable</h3><p>Reviewers export feedback as JSON and send it; you import it with one click.</p></div>
         <div class="reason reveal"><span class="ric"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 18l-5.8 3 1.1-6.5L2.6 9.8l6.5-.9z"/></svg></span><h3>Polished UI</h3><p>Floating toolbar, Figma-style comments panel, auto light/dark, full shortcuts.</p></div>
-        <div class="reason reveal"><span class="ric"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h7l-1 8 10-12h-7z"/></svg></span><h3>Tiny &amp; dependency-free</h3><p>~40 KB of vanilla JavaScript, zero dependencies, every evergreen browser.</p></div>
+        <div class="reason reveal"><span class="ric"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h7l-1 8 10-12h-7z"/></svg></span><h3>Dependency-free</h3><p>Vanilla JavaScript, zero runtime dependencies, every evergreen browser.</p></div>
       </div>
     </div>
 
@@ -648,7 +651,7 @@
           <tr><td class="row-lbl">Where feedback lives</td><td class="us"><span class="yes">Your browser</span></td><td><span class="no">Vendor cloud</span></td><td><span class="no">Vendor cloud</span></td><td><span class="no">Vendor cloud</span></td><td><span class="no">Vendor cloud</span></td></tr>
           <tr><td class="row-lbl">Works offline / self-host</td><td class="us"><span class="yes">Yes</span></td><td><span class="no">No</span></td><td><span class="no">No</span></td><td><span class="no">No</span></td><td><span class="no">No</span></td></tr>
           <tr><td class="row-lbl">Visual tools (draw/pin/ink)</td><td class="us"><span class="yes">Full set</span></td><td><span class="mid">Pin + box</span></td><td><span class="mid">Pin + box</span></td><td><span class="mid">Pin + draw</span></td><td><span class="mid">Pin + box</span></td></tr>
-          <tr><td class="row-lbl">Bundle size</td><td class="us"><span class="yes">~40 KB</span></td><td>Hosted app</td><td>Hosted app</td><td>Hosted app</td><td>Hosted app</td></tr>
+          <tr><td class="row-lbl">Runtime dependencies</td><td class="us"><span class="yes">None</span></td><td>Hosted app</td><td>Hosted app</td><td>Hosted app</td><td>Hosted app</td></tr>
         </tbody>
       </table>
     </div>
@@ -751,11 +754,11 @@
   <div class="faq-list reveal">
     <details class="faq" open>
       <summary>Where are comments stored? <span class="pm"><svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span></summary>
-      <div class="ans">In the reviewer’s own browser via <code>localStorage</code>, namespaced by project and page. Nothing is ever sent to a server. To share, you export a JSON file and your teammate imports it — every note reappears anchored in place.</div>
+      <div class="ans">In the reviewer’s own browser via <code>localStorage</code>, namespaced by project and page. Reviewers can export JSON, or use Send feedback if you configure an endpoint. Sending happens only when they choose it.</div>
     </details>
     <details class="faq">
       <summary>Does it work with my framework? <span class="pm"><svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span></summary>
-      <div class="ans">Yes — it’s a plain browser script. There are copy-paste recipes for React, Next.js, Vue, Svelte, WordPress, Webflow, Shopify and plain HTML in the README. The rule is the same everywhere: load it once, after the page renders.</div>
+      <div class="ans">Yes. Use the plain browser script, or import the ES module and call <code>init(config)</code> after mount and <code>destroy()</code> on unmount. Recipes for React, Next.js, Vue, Svelte, WordPress and plain HTML are in the README.</div>
     </details>
     <details class="faq">
       <summary>What happens if the underlying text changes? <span class="pm"><svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span></summary>
@@ -782,9 +785,13 @@
     <div class="eyebrow">07 — Get started</div>
     <h2>Put a review layer on your site today</h2>
     <p>Copy one script tag, reload, and start marking up the live page. No build step, no framework, no signup.</p>
+    <label class="post-setting" for="post-endpoint">Feedback endpoint (optional)
+      <input id="post-endpoint" type="url" placeholder="https://feedback.example.com/feedback" autocomplete="url" />
+    </label>
+    <p class="fine">Need a receiver? <a href="./examples/feedback-server.cjs">See the Node sample</a>.</p>
     <div class="codepill">
       <span class="pmt">&gt;_</span>
-      <code>&lt;script src="https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js" defer&gt;&lt;/script&gt;</code>
+      <code id="install-snippet">&lt;script src="https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js" defer&gt;&lt;/script&gt;</code>
       <button class="copy accent" data-copy="install">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg>
         <span>Copy</span>
@@ -794,7 +801,7 @@
       <button class="btn btn-primary" data-copy="install">Copy the snippet</button>
       <a class="btn btn-outline" href="https://github.com/reviewjs/annotate" target="_blank" rel="noopener noreferrer">Read the docs</a>
     </div>
-    <p class="fine">Ready in 30 seconds · ~40 KB · every evergreen browser · no account required</p>
+    <p class="fine">Feedback stays in the browser until a reviewer sends it · every evergreen browser · no account required</p>
   </div>
 </section>
 
@@ -805,7 +812,7 @@
       <a class="logo" href="#top" aria-label="annotate.js home">
         <img src="./logo.png" alt="Annotate.js" width="3024" height="582" />
       </a>
-      <p>A drop-in visual review &amp; annotation layer for any website. Local-only, zero backend, one script tag.</p>
+      <p>A drop-in visual review &amp; annotation layer for any website. Local-first, with an optional feedback endpoint.</p>
     </div>
     <div class="col">
       <h4>Product</h4>
@@ -837,6 +844,14 @@
     var TAG_O = '<' + 'script';
     var TAG_C = '<' + '/script>';
     var install = TAG_O + ' src="https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js" defer>' + TAG_C;
+    var endpointInput = document.getElementById('post-endpoint');
+    var installCode = document.getElementById('install-snippet');
+    endpointInput.addEventListener('input', function () {
+      var endpoint = endpointInput.value.trim().replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+      install = TAG_O + ' src="https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js"' +
+        (endpoint ? ' data-post-url="' + endpoint + '"' : '') + ' defer>' + TAG_C;
+      installCode.textContent = install;
+    });
 
     var snippets = {
       html: install,

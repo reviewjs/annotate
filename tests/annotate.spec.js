@@ -78,6 +78,32 @@ async function dispatchPointerStroke(page, startX, startY, endX, endY, steps = 1
 }
 
 test.beforeEach(async ({ page }) => {
+  // Keep legacy white-box coverage while ensuring the published script has
+  // no test hooks. The fixture injects them only into this browser response.
+  await page.route('**/annotate.js', async route => {
+    // Exercise the checkout even when an example uses the production CDN URL.
+    const response = await route.fetch({ url: 'http://localhost:4200/annotate.js' });
+    const source = await response.text();
+    const marker = '// ANNOTATE TEST INJECTION POINT';
+    if (!source.includes(marker)) {
+      throw new Error('annotate.js is missing the private test injection marker');
+    }
+    const hooks = `Object.assign(controller, {
+      _annotateImportForTest: function (data) { importComments(data); },
+      _annotateOpenImportForTest: function () { pickImportFile(); },
+      _annotatePatchForTest: function (id, changes) { return patchComment(id, changes); },
+      _annotateCountOccurrencesForTest: function (full, needle) { return countOccurrences(full, needle); },
+      _annotateCreateForTest: function (draft) {
+        var c = createComment(draft);
+        if (!c) return null;
+        state.comments.push(c);
+        renderAll(); renderPanel();
+        return c;
+      },
+      _annotateExportPayloadForTest: function () { return buildExportPayload(); }
+    });`;
+    await route.fulfill({ response, body: source.replace(marker, hooks) });
+  });
   await page.goto('/');
   await clearStorage(page);
   await page.reload();
@@ -870,6 +896,36 @@ test.describe('Export / Import', () => {
     expect(imported).toBe(before + 1);
   });
 
+  test('creation rejects a section note without a valid block anchor', async ({ page }) => {
+    const result = await page.evaluate(() => {
+      const before = window.Annotate.comments().length;
+      const created = window.Annotate._annotateCreateForTest({ type: 'block', text: 'missing anchor' });
+      return {
+        created,
+        count: window.Annotate.comments().length,
+        toast: document.querySelector('.an-toast.an-error')?.textContent || '',
+        before,
+      };
+    });
+    expect(result.created).toBeNull();
+    expect(result.count).toBe(result.before);
+    expect(result.toast).toContain('invalid anchor');
+  });
+
+  test('editing cannot persist a malformed reply or damage the existing comment', async ({ page }) => {
+    const result = await page.evaluate(() => {
+      const created = window.Annotate._annotateCreateForTest({ type: 'note', text: 'original' });
+      const rejected = window.Annotate._annotatePatchForTest(created.id, {
+        reply: { text: 'reply without required identity fields' },
+      });
+      const current = window.Annotate.comments().find(c => c.id === created.id);
+      return { rejected, text: current.text, replies: current.replies.length };
+    });
+    expect(result.rejected).toBeNull();
+    expect(result.text).toBe('original');
+    expect(result.replies).toBe(0);
+  });
+
   test('real file import via the file chooser imports one comment', async ({ page }) => {
     const before = await page.evaluate(() => window.Annotate.comments().length);
     const [fileChooser] = await Promise.all([
@@ -1483,8 +1539,8 @@ test.describe('Anchor integrity', () => {
     }, phrase);
     expect(occurrences).toBeGreaterThanOrEqual(2);
     // The library must not silently highlight an arbitrary copy: it surfaces
-    // an explicit unanchored/ambiguous state (no mark is painted).
-    await expect(page.locator('mark[data-an="ambig-1"]')).toHaveCount(0);
+    // an explicit unanchored/ambiguous state (no SVG range is painted).
+    await expect(page.locator('.an-highlight[data-an="ambig-1"]')).toHaveCount(0);
     await expect(page.locator('.an-unanchored-pill')).toHaveCount(1);
   });
 
@@ -1541,8 +1597,8 @@ test.describe('Anchor integrity', () => {
       localStorage.setItem('annotate:annotate-demo', JSON.stringify(stored));
       window.Annotate.refresh();
     });
-    // Exactly one mark is painted (the contextualized occurrence), no pill.
-    await expect(page.locator('mark[data-an="ctx-1"]')).toHaveCount(1);
+    // Exactly one SVG range is painted (the contextualized occurrence), no pill.
+    await expect(page.locator('.an-highlight[data-an="ctx-1"]')).toHaveCount(1);
     await expect(page.locator('.an-unanchored-pill')).toHaveCount(0);
   });
 
@@ -1562,7 +1618,7 @@ test.describe('Anchor integrity', () => {
       localStorage.setItem('annotate:annotate-demo', JSON.stringify(stored));
       window.Annotate.refresh();
     });
-    await expect(page.locator('mark[data-an="amb-2"]')).toHaveCount(0);
+    await expect(page.locator('.an-highlight[data-an="amb-2"]')).toHaveCount(0);
     await expect(page.locator('.an-unanchored-pill')).toHaveCount(1);
   });
 });
@@ -1948,7 +2004,7 @@ test.describe('Review fixes', () => {
     expect(res.inStorage).toBeLessThanOrEqual(1);
   });
 
-  test('highlight marks are keyboard-operable (role=button, tabindex=0)', async ({ page }) => {
+  test('SVG highlight markers are keyboard-operable (role=button, tabindex=0)', async ({ page }) => {
     const res = await page.evaluate(() => {
       const p = document.createElement('p');
       p.textContent = 'a uniquely quotable phrase for keyboard testing';
@@ -1957,7 +2013,7 @@ test.describe('Review fixes', () => {
         type: 'highlight', color: '#f59e0b', text: 'kbd',
         anchor: { prefix: '', exact: 'uniquely quotable phrase for keyboard testing', suffix: '' },
       });
-      const mark = document.querySelector('mark.an-mark[data-an="' + c.id + '"]');
+      const mark = document.querySelector('rect.an-highlight[data-an="' + c.id + '"]');
       return { role: mark && mark.getAttribute('role'), tabindex: mark && mark.getAttribute('tabindex') };
     });
     expect(res.role).toBe('button');

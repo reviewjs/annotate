@@ -1,42 +1,5 @@
-/* =============================================================================
- * annotate.js — a drop-in visual review & annotation layer for any website.
- * Open-source edition · local-only · zero backend.
- *
- * Load with a single <script> tag:
- *   <script src="https://cdn.jsdelivr.net/npm/reviewjs/annotate.js" defer></script>
- *
- * Comments are stored in the visitor's own browser (localStorage) and can be
- * exported to / imported from a portable JSON file — no server, no database,
- * no tracking. Perfect for design reviews, client feedback, QA passes and docs.
- *
- * Configure via data-attributes on the script tag (all optional):
- *   data-project   namespace for stored comments (keep separate sites apart)
- *   data-page      page key (default: location.pathname)
- *   data-accent    brand color for primary buttons / active tool
- *   data-theme     "light" | "dark" | "auto"  (default auto — sniffs page bg)
- *   data-position  "bottom-right" | "bottom-left"  (toolbar corner)
- *   data-blocks    CSS selector for section-comment (+) targets
- *   data-start-open "true" to show the toolbar on initial load
- *   data-note      author's note to reviewers — what should be reviewed
- *   data-share-email  where reviewers send comments: an email address, or a
- *                     Slack / Hangout (chat) link
- * …or via `window.AnnotateConfig = { project, page, … }` before the script.
- *
- * Tools: text highlight, rectangle, circle, pin, freehand ink and section
- * notes — each carries a threaded comment.
- *
- * All UI lives under ids/classes prefixed `an-` / `__an`; styles are injected
- * and scoped so it never collides with host-page content.
- *
- * MIT Licensed.
- * ========================================================================== */
-(function (root, createController) {
-  if (typeof module === "object" && module.exports) module.exports = createController(root);
-  else if (root && !root.Annotate) {
-    root.Annotate = createController(root);
-    root.Annotate.init(undefined, root.document.currentScript);
-  }
-})(typeof window !== "undefined" ? window : null, function (host) {
+// Generated from annotate.js by scripts/build.mjs. Do not edit directly.
+const createController = function (host) {
   "use strict";
   var instance = null, lastConfig, lastScript;
   var activeKey = typeof Symbol === "function" ? Symbol.for("reviewjs.annotate.controller") : "__ANNOTATE_CONTROLLER__";
@@ -2918,4 +2881,9 @@
   // ANNOTATE TEST INJECTION POINT
   return api;
   }
-});
+};
+const Annotate = createController(typeof window !== "undefined" ? window : null);
+const init = (config) => Annotate.init(config);
+const destroy = () => Annotate.destroy();
+export { init, destroy };
+export default Annotate;
