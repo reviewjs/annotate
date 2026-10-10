@@ -36,6 +36,7 @@
     "annotate.d.mts",
     "annotate.d.cts",
     "examples/feedback-server.cjs",
+    "examples/annotate-server.cjs",
     "README.md",
     "LICENSE"
   ],
@@ -47,7 +48,7 @@
     "deploy:pages": "npm run pages:build",
     "prepack": "npm run build",
     "publish:npm": "npm publish --access public",
-    "test:server": "node --test scripts/tests/feedback-server.test.cjs",
+    "test:server": "node --test scripts/tests/feedback-server.test.cjs scripts/tests/annotate-server.test.cjs",
     "test": "playwright test",
     "test:chromium": "playwright test --project=chromium",
     "test:mobile": "playwright test --project=mobile-chrome --project=mobile-safari",

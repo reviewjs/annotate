@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Remote review fixture</title>
+</head>
+<body>
+  <main id="content" style="min-height:600px">
+    <h1 id="title">Pricing</h1>
+    <p id="para">The quick brown fox jumps over the lazy dog.</p>
+  </main>
+  <!-- Served from the real test web server (not page.route) so Chrome's
+       local network access rules treat it as a loopback page. -->
+  <script>
+    var params = new URLSearchParams(location.search);
+    var script = document.createElement('script');
+    script.src = '/annotate.js';
+    script.dataset.project = 'remote';
+    script.dataset.api = params.get('api') || '';
+    script.dataset.reviewId = params.get('review') || '';
+    script.dataset.page = params.get('page') || '';
+    script.dataset.startOpen = 'true';
+    script.dataset.pollInterval = '700';
+    document.body.appendChild(script);
+  </script>
+</body>
+</html>

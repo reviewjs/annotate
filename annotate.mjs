@@ -21,7 +21,7 @@ const createController = function (host) {
     },
   };
   Object.defineProperty(controller, "config", { enumerable: true, get: function () { return instance ? instance.config : null; } });
-  ["open", "close", "toggle", "enable", "disable", "setTool", "refresh", "comments", "focus", "toast", "export", "import", "clear", "submit"].forEach(function (name) {
+  ["open", "close", "toggle", "enable", "disable", "setTool", "refresh", "comments", "focus", "toast", "export", "import", "clear", "submit", "setStatus", "assign", "syncState"].forEach(function (name) {
     controller[name] = function () {
       if (!instance) throw new Error("Call Annotate.init() first");
       return instance[name].apply(instance, arguments);
@@ -86,7 +86,14 @@ const createController = function (host) {
     share: String(scriptData.shareEmail || globalConfig.shareEmail || "").trim(),
     spa: truthy(scriptData.spa !== undefined ? scriptData.spa : globalConfig.spa),
     postUrl: String(scriptData.postUrl || globalConfig.postUrl || "").trim(),
+    api: String(scriptData.api || globalConfig.api || "").trim().replace(/\/+$/, ""),
+    reviewId: String(scriptData.reviewId || globalConfig.reviewId || "").trim(),
+    inviteParam: String(scriptData.inviteParam || globalConfig.inviteParam || "an_invite").trim(),
+    pollInterval: Math.max(500, Number(scriptData.pollInterval || globalConfig.pollInterval) || 20000),
   };
+  // Integrator-supplied auth ({ getToken, onUnauthorized }) is object-only,
+  // so it can come from AnnotateConfig / init() but never from data-*.
+  var authHook = globalConfig.auth && typeof globalConfig.auth.getToken === "function" ? globalConfig.auth : null;
   // An explicit data-page / AnnotateConfig.page is fixed; otherwise the page key
   // tracks the current pathname so history-based SPA routing stays isolated.
   var pageExplicit = !!explicitPage;
@@ -138,6 +145,7 @@ const createController = function (host) {
     tool: "cursor", // cursor | highlight | rect | circle | pin | pen
     color: store.get("an-color") || COLORS[0].hex,
     author: store.get("an-author") || "",
+    authorId: null, // server-assigned reviewer id; only set by a remote session
     // note & share are set by the author via data-note / data-share-email on
     // the embed script — they are static and never edited by the reviewer.
     note: CFG.note || "",
@@ -210,7 +218,19 @@ const createController = function (host) {
   // project; comments are namespaced by page key.
   // --------------------------------------------------------------------------
   // localStorage key holding this project's entire comment blob
-  var STORE_KEY = "annotate:" + (CFG.project || location.host || "default");
+  var LOCAL_STORE_KEY = "annotate:" + (CFG.project || location.host || "default");
+  // With a backend the blob is a per-review cache, kept apart from local-only
+  // comments so the two never mix.
+  var API_BASE = "";
+  if (CFG.api && CFG.reviewId) {
+    try {
+      var apiUrl = new URL(CFG.api, location.href);
+      if (/^https?:$/.test(apiUrl.protocol))
+        API_BASE = apiUrl.href.replace(/\/+$/, "") + "/v1/annotate/reviews/" + encodeURIComponent(CFG.reviewId);
+    } catch (e) {}
+  }
+  var REMOTE = !!API_BASE;
+  var STORE_KEY = REMOTE ? "annotate:remote:" + CFG.reviewId : LOCAL_STORE_KEY;
   function dbRead() {
     var d;
     try { d = JSON.parse(store.get(STORE_KEY) || "null"); } catch (e) { d = null; }
@@ -243,12 +263,90 @@ const createController = function (host) {
   // though they are not persisted; pageComments() overlays them back in.
   var unsaved = {};
 
+  // --------------------------------------------------------------------------
+  // RECORD SCHEMA v2 — one shape for storage, export, and the wire protocol.
+  // v1 records (no `schema`) are upgraded in memory on read; the next write
+  // persists them as v2. Runtime-only keys start with "__" and never leave
+  // the page: serialize() is the single exit point.
+  // --------------------------------------------------------------------------
+  var SCHEMA = 2;
+  var STATUSES = { open: "Open", in_progress: "In progress", resolved: "Resolved", wont_fix: "Won’t fix" };
+  function isClosed(status) { return status === "resolved" || status === "wont_fix"; }
+  function safeColor(v) {
+    return typeof v === "string" && /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(v) ? v : COLORS[0].hex;
+  }
+  function strOrNull(v) { return typeof v === "string" && v ? v : null; }
+  var GEOM_KEYS = ["kind", "selector", "x", "y", "w", "h", "vw", "vh", "points"];
+  function normalizeGeom(g) {
+    if (!g || typeof g !== "object") return null;
+    var out = {};
+    GEOM_KEYS.forEach(function (k) { if (g[k] !== undefined) out[k] = k === "points" ? g.points.map(function (p) { return [p[0], p[1]]; }) : g[k]; });
+    return out;
+  }
+  function normalizeAssignee(a) {
+    if (!a || typeof a !== "object" || typeof a.name !== "string" || !a.name.trim()) return null;
+    return { id: strOrNull(a.id), name: a.name.trim().slice(0, 80) };
+  }
+  function normalizeReply(r) {
+    return { id: r.id, author: r.author, authorId: strOrNull(r.authorId), text: r.text,
+      createdAt: r.createdAt, editedAt: strOrNull(r.editedAt) };
+  }
+  // Allowlists known fields (unknown keys are dropped) and fills v2 defaults.
+  // Callers validate with isValidComment() first.
+  function normalizeComment(c) {
+    var status = STATUSES[c.status] ? c.status : (c.resolved === true ? "resolved" : "open");
+    var closed = isClosed(status);
+    return {
+      schema: SCHEMA,
+      id: c.id,
+      page: c.page,
+      url: typeof c.url === "string" ? c.url : "",
+      type: c.type,
+      author: c.author,
+      authorId: strOrNull(c.authorId),
+      text: c.text,
+      color: safeColor(c.color),
+      anchor: c.anchor ? { exact: c.anchor.exact, prefix: c.anchor.prefix, suffix: c.anchor.suffix } : null,
+      geom: normalizeGeom(c.geom),
+      visibility: c.visibility === "private" ? "private" : "shared",
+      status: status,
+      resolved: closed,
+      resolvedBy: closed ? strOrNull(c.resolvedBy) : null,
+      resolvedAt: closed ? strOrNull(c.resolvedAt) : null,
+      assignee: normalizeAssignee(c.assignee),
+      assignedAt: c.assignee ? strOrNull(c.assignedAt) : null,
+      replies: c.replies.map(normalizeReply),
+      createdAt: typeof c.createdAt === "string" ? c.createdAt : "",
+      updatedAt: typeof c.updatedAt === "string" ? c.updatedAt : (typeof c.createdAt === "string" ? c.createdAt : ""),
+      editedAt: strOrNull(c.editedAt),
+    };
+  }
+  // Deep copy without runtime ("__"-prefixed) keys. Used by export, copy,
+  // submit, undo and every wire write.
+  function serialize(c) {
+    return JSON.parse(JSON.stringify(c, function (k, v) { return k.slice(0, 2) === "__" ? undefined : v; }));
+  }
+  // A comment is "mine" when the server identity matches, or — with no
+  // identity on either side — when the display name matches.
+  function isMine(c) {
+    if (state.authorId && c.authorId) return c.authorId === state.authorId;
+    return c.author === (state.author || "Anonymous");
+  }
+
+  // Local-only mode keeps 1.4 behavior: this browser owns its whole store,
+  // so any comment in it may be deleted. A review backend allows the creator
+  // and review authors.
+  function canDelete(c) { return !REMOTE || isMine(c) || isReviewAuthor(); }
+  // Review authors (session role "author") see every reviewer's comments
+  // and address them; reviewers only ever receive their own.
+  function isReviewAuthor() { return REMOTE && !!sync.reviewer && sync.reviewer.role === "author"; }
+
   function pageComments() {
     // Validate stored records before touching properties: a corrupt/legacy
     // entry (e.g. [null]) must be skipped rather than crash rendering.
     var listed = dbRead().comments.filter(function (c) {
       return isValidComment(c) && c.page === PAGE;
-    });
+    }).map(normalizeComment);
     // Reoverlay unsaved records for this page onto the persisted list (upsert
     // by id) so work that never reached storage is not lost on reload.
     Object.keys(unsaved).forEach(function (id) {
@@ -263,25 +361,35 @@ const createController = function (host) {
   function createComment(draft) {
     var d = dbRead(), now = new Date().toISOString();
     var c = {
+      schema: SCHEMA,
       id: uid(),
       page: PAGE,
       url: location.href,
       type: draft.type || "note",
       author: state.author || "Anonymous",
+      authorId: state.authorId,
       text: String(draft.text || "").slice(0, MAX_COMMENT_TEXT),
-      color: draft.color || state.color,
+      color: safeColor(draft.color || state.color),
       anchor: draft.anchor || null,
       geom: draft.geom || null,
+      visibility: "shared",
+      status: "open",
       resolved: false,
+      resolvedBy: null,
+      resolvedAt: null,
+      assignee: null,
+      assignedAt: null,
       replies: [],
       createdAt: now,
       updatedAt: now,
+      editedAt: null,
     };
     if (!isValidComment(c)) { toast("Cannot save this comment: invalid anchor or content", { kind: "error" }); return null; }
     d.comments.push(c);
     var ok = dbWrite(d); // surfaces the banner if the write was refused; the caller
                 // keeps the comment in state so it stays visible & exportable
     if (!ok) unsaved[c.id] = c; // keep it so edits/reloads don't lose it
+    remotePut(c, ["*"]);
     return c;
   }
   function patchComment(id, changes) {
@@ -294,25 +402,48 @@ const createController = function (host) {
       // persisted list; fall back to our in-memory copy so it stays editable.
       return null;
     }
-    c = JSON.parse(JSON.stringify(c));
-    if (typeof changes.text === "string") c.text = changes.text.slice(0, MAX_COMMENT_TEXT);
-    if (typeof changes.resolved === "boolean") c.resolved = changes.resolved;
-    if (typeof changes.color === "string") c.color = changes.color;
+    if (!isValidComment(c)) return null;
+    c = normalizeComment(serialize(c));
+    var now = new Date().toISOString(), fields = [];
+    if (typeof changes.text === "string" && changes.text.slice(0, MAX_COMMENT_TEXT) !== c.text) {
+      c.text = changes.text.slice(0, MAX_COMMENT_TEXT); c.editedAt = now; fields.push("text");
+    }
+    var status = STATUSES[changes.status] ? changes.status
+      : typeof changes.resolved === "boolean" ? (changes.resolved ? "resolved" : "open") : null;
+    if (status && status !== c.status) {
+      c.status = status;
+      c.resolved = isClosed(status);
+      c.resolvedBy = c.resolved ? state.authorId : null;
+      c.resolvedAt = c.resolved ? now : null;
+      fields.push("status");
+    }
+    if (changes.assignee !== undefined) {
+      var assignee = normalizeAssignee(changes.assignee);
+      if (JSON.stringify(assignee) !== JSON.stringify(c.assignee)) {
+        c.assignee = assignee; c.assignedAt = assignee ? now : null; fields.push("assignee");
+      }
+    }
+    if (typeof changes.color === "string" && safeColor(changes.color) !== c.color) { c.color = safeColor(changes.color); fields.push("color"); }
+    var replyAdded = false;
     if (changes.reply) {
-      var reply = Object.assign({}, changes.reply, { text: String(changes.reply.text || "").slice(0, MAX_REPLY_TEXT) });
+      var reply = normalizeReply(Object.assign({ authorId: state.authorId, editedAt: null }, changes.reply,
+        { text: String(changes.reply.text || "").slice(0, MAX_REPLY_TEXT) }));
       // Enforce the thread cap at input too — a comment can never grow beyond
       // the number imports will accept, so native exports always round-trip.
-      if (c.replies.length < MAX_REPLIES) c.replies.push(reply);
+      if (c.replies.length < MAX_REPLIES) { c.replies.push(reply); replyAdded = true; }
     }
     if (changes.editReply) {
       var ri = c.replies.findIndex(function (r) { return r.id === changes.editReply.id; });
       if (ri >= 0) c.replies[ri] = Object.assign({}, c.replies[ri],
-        { text: String(changes.editReply.text || "").slice(0, MAX_REPLY_TEXT) });
+        { text: String(changes.editReply.text || "").slice(0, MAX_REPLY_TEXT), editedAt: now });
     }
+    var replyRemoved = false;
     if (changes.deleteReply) {
+      var before = c.replies.length;
       c.replies = c.replies.filter(function (r) { return r.id !== changes.deleteReply; });
+      replyRemoved = c.replies.length < before;
     }
-    c.updatedAt = new Date().toISOString();
+    c.updatedAt = now;
     if (!isValidComment(c)) { toast("Cannot save this edit: invalid content", { kind: "error" }); return null; }
     if (fromUnsaved) d.comments.push(c);
     else d.comments = d.comments.map(function (x) { return x && x.id === id ? c : x; });
@@ -327,13 +458,575 @@ const createController = function (host) {
     } else {
       delete unsaved[id];
     }
+    if (fields.length) remotePut(c, fields);
+    if (replyAdded) remoteEnqueue({ t: "reply", id: id, r: { id: changes.reply.id, text: c.replies[c.replies.length - 1].text } });
+    if (replyRemoved) remoteEnqueue({ t: "unreply", id: id, rid: changes.deleteReply });
     return c;
   }
-  function removeComment(id) {
+  function removeComment(id, holdMs) {
     delete unsaved[id]; // it must not linger in the recoverable memory set
     var d = dbRead();
     d.comments = d.comments.filter(function (c) { return c.id !== id; });
     dbWrite(d);
+    remoteDelete(id, holdMs);
+  }
+
+  // --------------------------------------------------------------------------
+  // REMOTE SYNC — opt-in backend (data-api + data-review-id) speaking the
+  // annotate wire protocol v1. localStorage stays the UI's synchronous source
+  // as a per-review cache. Every write is mirrored into a persisted FIFO
+  // queue that one request at a time drains to the server; a poll merges the
+  // server's view back in. Nothing here runs, and nothing leaves the page,
+  // without data-api.
+  // --------------------------------------------------------------------------
+  var QUEUE_KEY = "annotate:queue:" + CFG.reviewId;
+  var INVITE_KEY = "annotate:invite:" + CFG.reviewId;
+  var CONTENT_FIELDS = ["text", "color", "anchor", "geom", "status", "assignee"];
+  var UNDO_MS = 5500;
+  var sync = {
+    token: null, expiresAt: 0, reviewer: null, sessionPromise: null, refused: false,
+    inflight: null, timer: 0, pollTimer: 0, polling: false, etag: "", etagPage: "",
+    failures: 0, offline: false, held: false, state: "", acks: 0, waiters: [], controllers: new Set(),
+    baselined: {},
+  };
+  var queueOk = true, queueMem = [];
+
+  function wirePage(local) {
+    var prefix = CFG.project ? CFG.project + ":" : "";
+    return prefix && local.indexOf(prefix) === 0 ? local.slice(prefix.length) : local;
+  }
+  function localPage(wire) { return (CFG.project ? CFG.project + ":" : "") + wire; }
+  function idemKey() {
+    return window.crypto && crypto.randomUUID ? crypto.randomUUID() : uid() + "-" + uid().slice(1);
+  }
+  var OP_TYPES = { put: 1, del: 1, reply: 1, unreply: 1 };
+  function readQueue() {
+    if (!queueOk) return queueMem.slice();
+    var q;
+    try { q = JSON.parse(store.get(QUEUE_KEY) || "[]"); } catch (e) { q = []; }
+    return (Array.isArray(q) ? q : []).filter(function (o) {
+      return o && OP_TYPES[o.t] === 1 && typeof o.id === "string" && typeof o.key === "string";
+    });
+  }
+  function writeQueue(q) {
+    queueMem = q.slice();
+    queueOk = store.set(QUEUE_KEY, JSON.stringify(q));
+  }
+  function remoteEnqueue(op) {
+    if (!REMOTE) return;
+    op.key = idemKey();
+    var q = readQueue();
+    // Coalesce consecutive edits of one record into the queued PUT that has
+    // not been sent yet; the body is built from the cache at send time.
+    if (op.t === "put") {
+      for (var i = q.length - 1; i >= 0; i--) {
+        if (q[i].id !== op.id) continue;
+        if (q[i].t === "put" && !(sync.inflight && sync.inflight.key === q[i].key)) {
+          q[i].f = q[i].f.indexOf("*") >= 0 || op.f.indexOf("*") >= 0 ? ["*"]
+            : q[i].f.concat(op.f.filter(function (f) { return q[i].f.indexOf(f) < 0; }));
+          writeQueue(q); syncChanged(); scheduleFlush(0);
+          return;
+        }
+        break;
+      }
+    }
+    q.push(op);
+    writeQueue(q);
+    syncChanged();
+    scheduleFlush(0);
+  }
+  function remotePut(c, fields) {
+    // Private notes never reach the wire.
+    if (REMOTE && c.visibility !== "private") remoteEnqueue({ t: "put", id: c.id, f: fields });
+  }
+  function serverStamps(d) {
+    if (!d.stamps || typeof d.stamps !== "object") d.stamps = {};
+    return d.stamps;
+  }
+  // The delete is held for the undo window, and so is every earlier op for
+  // that id (see nextOp), so Undo can cancel it and lose nothing. Once due,
+  // earlier ops for a record no longer in the cache are skipped (sendOp).
+  function remoteDelete(id, holdMs) {
+    if (!REMOTE) return;
+    var q = readQueue();
+    q.push({ t: "del", id: id, key: idemKey(), nb: Date.now() + (holdMs || 0) });
+    writeQueue(q);
+    syncChanged();
+    scheduleFlush(0);
+  }
+  // Undo of a delete: cancel the held DELETE if it has not been sent;
+  // otherwise re-create (a tombstoned id answers 410 and is dropped).
+  function remoteRestore(c) {
+    if (!REMOTE) return;
+    var q = readQueue(), cancelled = false;
+    q = q.filter(function (o) {
+      var drop = o.t === "del" && o.id === c.id && !(sync.inflight && sync.inflight.key === o.key);
+      if (drop) cancelled = true;
+      return !drop;
+    });
+    writeQueue(q);
+    if (!cancelled) remotePut(c, ["*"]);
+    syncChanged();
+    scheduleFlush(0);
+  }
+
+  function dispatch(name, detail) {
+    try { window.dispatchEvent(new window.CustomEvent(name, { detail: detail })); } catch (e) {}
+  }
+  function syncState() {
+    if (!REMOTE) return { state: "local", pending: 0 };
+    var pending = readQueue().length;
+    var s = sync.held ? "error" : sync.offline ? "offline" : pending ? "pending" : "idle";
+    return { state: s, pending: pending };
+  }
+  var SYNC_TEXT = {
+    idle: "Saved to the review. Only you and the review owner see your comments.",
+    pending: "Saving changes to the review…",
+    offline: "Offline — changes are kept here and sync when the connection returns.",
+    error: "Not signed in to the review — changes are kept on this device.",
+  };
+  function syncChanged() {
+    if (!REMOTE) return;
+    var s = syncState(), sig = s.state + ":" + s.pending;
+    if (sig === sync.state) return;
+    sync.state = sig;
+    var note = document.getElementById("__an_syncnote");
+    if (note) { note.textContent = SYNC_TEXT[s.state]; note.setAttribute("data-state", s.state); }
+    dispatch("annotate:sync", s);
+  }
+  function settleWaiters(error) {
+    var waiters = sync.waiters; sync.waiters = [];
+    waiters.forEach(function (w) { if (error) w.reject(error); else w.resolve(); });
+  }
+
+  function apiFetch(method, path, body, headers) {
+    var controller = window.AbortController ? new window.AbortController() : null;
+    if (controller) sync.controllers.add(controller);
+    var timeout = setTimeout(function () { if (controller) controller.abort(); }, 30000);
+    var h = Object.assign({}, headers || {});
+    if (sync.token) h.Authorization = "Bearer " + sync.token;
+    if (body !== undefined) h["Content-Type"] = "application/json";
+    return window.fetch(API_BASE + path, {
+      method: method, headers: h, credentials: "omit", cache: "no-store",
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller ? controller.signal : undefined,
+    }).then(function (res) {
+      if (res.status === 204 || res.status === 304) return { res: res, data: null };
+      return res.json().then(function (data) { return { res: res, data: data }; }, function () { return { res: res, data: null }; });
+    }).finally(function () { clearTimeout(timeout); if (controller) sync.controllers.delete(controller); });
+  }
+
+  // Invite tokens arrive once in the URL; keep them for this review and strip
+  // them so they are not bookmarked, shared or sent as a Referer.
+  function captureInvite() {
+    if (!REMOTE || !CFG.inviteParam) return;
+    var u;
+    try { u = new URL(location.href); } catch (e) { return; }
+    var token = u.searchParams.get(CFG.inviteParam);
+    if (!token) return;
+    store.set(INVITE_KEY, token);
+    u.searchParams.delete(CFG.inviteParam);
+    try { window.history.replaceState(window.history.state, "", u.pathname + u.search + u.hash); } catch (e) {}
+  }
+  function hasInvite() { return REMOTE && !!store.get(INVITE_KEY); }
+
+  // Resolves with a session token, or null when none can be had yet (no
+  // invite and no name). The session token itself lives in memory only.
+  function ensureSession(force) {
+    if (!REMOTE || destroyed) return Promise.resolve(null);
+    if (!force && sync.token && sync.expiresAt > Date.now() + 60000) return Promise.resolve(sync.token);
+    if (sync.sessionPromise) return sync.sessionPromise;
+    var p;
+    if (authHook) {
+      p = Promise.resolve().then(function () { return authHook.getToken(); }).then(function (token) {
+        sync.token = typeof token === "string" && token ? token : null;
+        sync.expiresAt = sync.token ? Infinity : 0;
+        return sync.token;
+      });
+    } else {
+      var invite = store.get(INVITE_KEY);
+      var body = invite ? { invite: invite } : state.author ? { name: state.author } : null;
+      if (!body) return Promise.resolve(null);
+      sync.token = null;
+      p = apiFetch("POST", "/session", body).then(function (r) {
+        if (r.res.status === 200 && r.data && typeof r.data.token === "string") { acceptSession(r.data); return sync.token; }
+        if (r.res.status === 403 || r.res.status === 404) { sessionRefused(r.data && r.data.error, !!invite); return null; }
+        throw new Error("HTTP " + r.res.status);
+      });
+    }
+    sync.sessionPromise = p.finally(function () { sync.sessionPromise = null; });
+    return sync.sessionPromise;
+  }
+  function acceptSession(data) {
+    sync.token = data.token;
+    sync.expiresAt = Date.parse(data.expiresAt) || Date.now() + 3600000;
+    sync.held = false;
+    if (data.reviewer && typeof data.reviewer.id === "string") {
+      sync.reviewer = { id: data.reviewer.id, name: String(data.reviewer.name || ""),
+        role: data.reviewer.role === "author" ? "author" : "reviewer" };
+      state.authorId = sync.reviewer.id;
+      if (sync.reviewer.name) state.author = sync.reviewer.name;
+    }
+    if (data.review && typeof data.review.note === "string" && data.review.note) { state.note = data.review.note; renderNote(); }
+    dispatch("annotate:auth", { reviewer: sync.reviewer });
+    syncChanged();
+    if (booted) renderPanel();
+  }
+  // The server refused this link: say so and fall back to local-only mode
+  // rather than degrading silently.
+  function sessionRefused(code, viaInvite) {
+    if (viaInvite) store.set(INVITE_KEY, "");
+    toast(viaInvite || code === "invite_invalid" ? "This review link is no longer valid. Comments stay in this browser only."
+      : "Could not join the review (" + (code || "refused") + "). Comments stay in this browser only.", { kind: "error", duration: 8000 });
+    goLocal();
+  }
+  function goLocal() {
+    REMOTE = false;
+    stopSync();
+    STORE_KEY = LOCAL_STORE_KEY;
+    state.authorId = null;
+    dispatch("annotate:sync", { state: "local", pending: 0 });
+    if (booted) { loadData(); renderFooter(); }
+  }
+  function stopSync() {
+    clearTimeout(sync.timer); clearTimeout(sync.pollTimer);
+    sync.controllers.forEach(function (c) { c.abort(); });
+    sync.controllers.clear();
+    settleWaiters(new Error("Sync stopped"));
+  }
+  function startSync() {
+    if (!REMOTE || destroyed) return;
+    ensureSession().then(function (token) {
+      if (!token) return;
+      scheduleFlush(0);
+      poll();
+    }, function () { networkFailure(); });
+  }
+
+  function scheduleFlush(delay) {
+    if (!REMOTE || destroyed) return;
+    clearTimeout(sync.timer);
+    sync.timer = setTimeout(flushQueue, delay || 0);
+  }
+  // Picks the first op that is due, keeping per-record order: an op never
+  // overtakes an earlier op for the same id.
+  function nextOp(q) {
+    var now = Date.now(), blocked = {}, wait = Infinity;
+    q.forEach(function (o) {
+      if (o.t === "del" && o.nb && o.nb > now) { blocked[o.id] = true; wait = Math.min(wait, o.nb - now); }
+    });
+    for (var i = 0; i < q.length; i++) {
+      var o = q[i];
+      if (blocked[o.id]) continue;
+      if (o.nb && o.nb > now) { blocked[o.id] = true; wait = Math.min(wait, o.nb - now); continue; }
+      return { op: o };
+    }
+    return { wait: wait };
+  }
+  function flushQueue() {
+    if (!REMOTE || destroyed || sync.inflight || sync.held) return;
+    var q = readQueue();
+    syncChanged();
+    if (!q.length) { settleWaiters(); return; }
+    var pick = nextOp(q);
+    if (!pick.op) { if (pick.wait < Infinity) scheduleFlush(pick.wait); return; }
+    if (!sync.token) {
+      ensureSession().then(function (token) {
+        if (token) scheduleFlush(0);
+        else settleWaiters(new Error("Not signed in to the review"));
+      }, function () { networkFailure(); });
+      return;
+    }
+    var op = sync.inflight = pick.op;
+    sendOp(op).then(function (r) {
+      sync.inflight = null;
+      handleResponse(op, r);
+    }, function () {
+      sync.inflight = null;
+      if (destroyed) return;
+      networkFailure();
+    });
+  }
+  function sendOp(op) {
+    var path = "/comments/" + encodeURIComponent(op.id), headers = { "Idempotency-Key": op.key };
+    var d = dbRead();
+    var rec = d.comments.filter(function (c) { return c && c.id === op.id; })[0] || unsaved[op.id];
+    // The record is gone locally (its delete follows) or turned private.
+    if (op.t !== "del" && (!rec || !isValidComment(rec) || rec.visibility === "private")) return Promise.resolve({ skip: true });
+    if (op.t === "put") {
+      var body = serialize(normalizeComment(rec));
+      body.page = wirePage(body.page);
+      body.replies = [];   // replies travel on their own endpoint
+      body.updatedAt = serverStamps(d)[op.id] || body.updatedAt;   // the base for the stale check
+      return apiFetch("PUT", path, body, headers);
+    }
+    if (op.t === "del") return apiFetch("DELETE", path, undefined, headers);
+    if (op.t === "reply") return apiFetch("POST", path + "/replies", { id: op.r.id, text: op.r.text }, headers);
+    return apiFetch("DELETE", path + "/replies/" + encodeURIComponent(op.rid), undefined, headers);
+  }
+  function dropOps(pred) {
+    writeQueue(readQueue().filter(function (o) { return !pred(o); }));
+  }
+  function retryAfterMs(res) {
+    var v = res.headers.get("Retry-After"), n = Number(v);
+    if (v && isFinite(n)) return Math.max(0, n * 1000);
+    var at = v ? Date.parse(v) : NaN;
+    return isFinite(at) ? Math.max(0, at - Date.now()) : backoffMs();
+  }
+  function backoffMs() {
+    var base = Math.min(60000, 1000 * Math.pow(2, Math.min(sync.failures, 6)));
+    return Math.round(base / 2 + Math.random() * base / 2);
+  }
+  function networkFailure() {
+    sync.failures++;
+    sync.offline = true;
+    syncChanged();
+    settleWaiters(new Error("Offline — changes are queued and will sync later"));
+    scheduleFlush(backoffMs());
+  }
+  function handleResponse(op, r) {
+    if (destroyed) return;
+    if (r.skip) { dropOps(function (o) { return o.key === op.key; }); scheduleFlush(0); return; }
+    var res = r.res, data = r.data || {}, status = res.status;
+    if (status === 429 || status === 503 || status >= 500) {
+      sync.failures++;
+      if (status >= 500 && status !== 503) sync.offline = true;
+      syncChanged();
+      scheduleFlush(status === 429 || status === 503 ? retryAfterMs(res) : backoffMs());
+      return;
+    }
+    sync.failures = 0; sync.offline = false;
+    if (status === 401) {
+      // Re-exchange once; a second refusal holds the queue for the host.
+      if (op.reauth) {
+        sync.held = true; syncChanged();
+        settleWaiters(new Error("Not signed in to the review"));
+        if (authHook && typeof authHook.onUnauthorized === "function") { try { authHook.onUnauthorized(); } catch (e) {} }
+        return;
+      }
+      markOp(op, { reauth: true });
+      sync.token = null;
+      ensureSession(true).then(function (token) {
+        if (token) scheduleFlush(0);
+        else { sync.held = true; syncChanged(); settleWaiters(new Error("Not signed in to the review")); }
+      }, function () { networkFailure(); });
+      return;
+    }
+    if (status === 409 && data.comment) {
+      // Someone changed it first: take theirs, re-apply our fields, resend
+      // with a new key (the body differs from the one the old key covered).
+      var attempts = (op.n || 0) + 1;
+      applyServer(data.comment, op);
+      if (attempts > 5) dropOps(function (o) { return o.key === op.key; });
+      else markOp(op, { key: idemKey(), n: attempts });
+      scheduleFlush(0);
+      return;
+    }
+    if (status === 410) {
+      dropOps(function (o) { return o.id === op.id; });
+      forgetRecord(op.id);
+      if (op.t !== "del") toast("A comment you changed was already deleted.", { kind: "info", duration: 6000 });
+      afterSync();
+      scheduleFlush(0);
+      return;
+    }
+    dropOps(function (o) { return o.key === op.key; });
+    if (res.ok) {
+      sync.acks++;
+      if (data.comment) applyServer(data.comment, null);
+      else if (op.t === "del") forgetRecord(op.id);
+    } else {
+      // 403 not_owner, 404, 413, 422…: the server will never accept this op.
+      // Drop it and re-read so the UI shows what the server holds.
+      toast("The review server rejected a change (" + (data.error || "HTTP " + status) + ").", { kind: "error", duration: 6000 });
+      sync.etag = "";
+      setTimeout(poll, 0);
+    }
+    syncChanged();
+    scheduleFlush(0);
+  }
+  function markOp(op, patch) {
+    var q = readQueue();
+    q.forEach(function (o) { if (o.key === op.key) Object.assign(o, patch); });
+    writeQueue(q);
+  }
+  function forgetRecord(id) {
+    var d = dbRead();
+    d.comments = d.comments.filter(function (c) { return !c || c.id !== id; });
+    delete serverStamps(d)[id];
+    delete unsaved[id];
+    dbWrite(d);
+    afterSync();
+  }
+  // Server record → cache. Ops still queued for that id are re-applied on
+  // top, so pending local work is never overwritten by an older server view.
+  function fromWire(w) {
+    if (!isValidComment(w) || typeof w.page !== "string" || w.visibility === "private") return null;
+    var c = normalizeComment(w);
+    c.page = localPage(w.page);
+    return c;
+  }
+  function overlayOps(server, local, ops) {
+    var out = server;
+    ops.forEach(function (o) {
+      if (o.t === "put" && local) {
+        (o.f.indexOf("*") >= 0 ? CONTENT_FIELDS : o.f).forEach(function (f) {
+          out[f] = local[f] === undefined ? out[f] : JSON.parse(JSON.stringify(local[f]));
+          if (f === "status") { out.resolved = isClosed(out.status); out.resolvedBy = local.resolvedBy || null; out.resolvedAt = local.resolvedAt || null; }
+          if (f === "assignee") out.assignedAt = local.assignedAt || null;
+          if (f === "text") out.editedAt = local.editedAt || out.editedAt;
+        });
+      } else if (o.t === "reply" && local && !out.replies.some(function (r) { return r.id === o.r.id; })) {
+        var mine = (local.replies || []).filter(function (r) { return r.id === o.r.id; })[0];
+        if (mine) out.replies.push(mine);
+      } else if (o.t === "unreply") {
+        out.replies = out.replies.filter(function (r) { return r.id !== o.rid; });
+      }
+    });
+    return out;
+  }
+  function applyServer(wire, exceptOp) {
+    var c = fromWire(wire);
+    if (!c) return;
+    var d = dbRead(), q = readQueue().filter(function (o) { return o.id === c.id && (!exceptOp || o.key !== exceptOp.key); });
+    if (exceptOp) q.unshift(exceptOp);   // a 409'd op is re-applied too
+    serverStamps(d)[c.id] = wire.updatedAt;
+    // Our own acknowledged write is not news to us.
+    if (!exceptOp) setReadMark(c.id, wire.updatedAt);
+    var idx = -1;
+    for (var i = 0; i < d.comments.length; i++) if (d.comments[i] && d.comments[i].id === c.id) { idx = i; break; }
+    var local = idx >= 0 ? d.comments[idx] : unsaved[c.id];
+    if (q.some(function (o) { return o.t === "del"; })) { dbWrite(d); return; }
+    var merged = overlayOps(c, local && isValidComment(local) ? normalizeComment(local) : null, q);
+    if (idx >= 0) d.comments[idx] = merged; else d.comments.push(merged);
+    if (dbWrite(d)) delete unsaved[c.id]; else unsaved[c.id] = merged;
+    afterSync();
+  }
+  // Server page list → cache. Records with pending ops keep their local
+  // form; a cached record the server no longer lists, with no pending op and
+  // a server stamp, was deleted elsewhere.
+  function mergeServerPage(list) {
+    var d = dbRead(), stamps = serverStamps(d), q = readQueue(), seen = {};
+    var byId = {};
+    d.comments.forEach(function (c) { if (c && typeof c.id === "string") byId[c.id] = c; });
+    var pending = {};
+    q.forEach(function (o) { (pending[o.id] = pending[o.id] || []).push(o); });
+    var kept = d.comments.filter(function (c) { return c && c.page !== PAGE; });
+    // The first read of a page this session sets read marks for comments
+    // never seen before; after that, a new or changed server record with no
+    // local op behind it is someone else's change and counts as unread.
+    var marks = readMarks(), first = !sync.baselined[PAGE], fresh = 0, removed = 0;
+    sync.baselined[PAGE] = true;
+    list.forEach(function (w) {
+      var c = fromWire(w);
+      if (!c || c.page !== PAGE || seen[c.id]) return;
+      seen[c.id] = true;
+      var previous = stamps[c.id];
+      stamps[c.id] = w.updatedAt;
+      if (!pending[c.id]) {
+        if (marks[c.id] === undefined && (first || c.authorId && c.authorId === state.authorId)) marks[c.id] = w.updatedAt;
+        else if (previous !== w.updatedAt && (marks[c.id] === undefined || w.updatedAt > marks[c.id])) fresh++;
+      }
+      var ops = pending[c.id];
+      if (ops && ops.some(function (o) { return o.t === "del"; })) return;
+      var local = byId[c.id] && isValidComment(byId[c.id]) ? normalizeComment(byId[c.id]) : null;
+      kept.push(ops ? overlayOps(c, local, ops) : c);
+    });
+    d.comments.forEach(function (c) {
+      if (!c || c.page !== PAGE || seen[c.id]) return;
+      if (pending[c.id]) { kept.push(c); return; }
+      if (stamps[c.id]) { delete stamps[c.id]; delete marks[c.id]; removed++; return; }   // deleted remotely
+      kept.push(c);   // never reached the server (private, or rejected): stays local
+    });
+    var pageList = kept.filter(function (c) { return c && c.page === PAGE; })
+      .sort(function (a, b) { return a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0; });
+    d.comments = kept.filter(function (c) { return c.page !== PAGE; }).concat(pageList);
+    dbWrite(d);
+    writeMarks(marks);
+    if (fresh) toast(isReviewAuthor()
+      ? fresh + " comment" + (fresh === 1 ? "" : "s") + " changed on this page"
+      : "The review owner updated " + fresh + " of your comments", { kind: "info", duration: 6000 });
+    if (removed && !isReviewAuthor())
+      toast("The review owner removed " + removed + " of your comments", { kind: "info", duration: 6000 });
+    afterSync();
+  }
+
+  // Read marks: per comment, the server updatedAt this browser last showed
+  // the reviewer. Kept per review in localStorage, never sent anywhere.
+  var READ_KEY = "annotate:read:" + CFG.reviewId;
+  function readMarks() {
+    var m;
+    try { m = JSON.parse(store.get(READ_KEY) || "{}"); } catch (e) { m = null; }
+    return m && typeof m === "object" && !Array.isArray(m) ? m : {};
+  }
+  function writeMarks(m) { store.set(READ_KEY, JSON.stringify(m)); }
+  function setReadMark(id, stamp) {
+    if (!REMOTE || !stamp) return;
+    var m = readMarks();
+    m[id] = stamp;
+    writeMarks(m);
+  }
+  // Ids whose server version is newer than what the reviewer has seen.
+  function unreadIds() {
+    var out = {};
+    if (!REMOTE) return out;
+    var stamps = serverStamps(dbRead()), marks = readMarks(), pending = {};
+    readQueue().forEach(function (o) { pending[o.id] = true; });
+    state.comments.forEach(function (c) {
+      var stamp = stamps[c.id];
+      if (stamp && !pending[c.id] && (marks[c.id] === undefined || stamp > marks[c.id])) out[c.id] = true;
+    });
+    return out;
+  }
+  function acknowledge(id) {
+    if (!REMOTE) return;
+    setReadMark(id, serverStamps(dbRead())[id]);
+  }
+  function poll() {
+    if (!REMOTE || destroyed) return;
+    clearTimeout(sync.pollTimer);
+    if (document.hidden) return;   // resumed on visibilitychange
+    sync.pollTimer = setTimeout(poll, CFG.pollInterval);
+    if (!sync.token || sync.polling) return;
+    var page = wirePage(PAGE), localKey = PAGE, acks = sync.acks;
+    if (sync.etagPage !== page) { sync.etag = ""; sync.etagPage = page; }
+    sync.polling = true;
+    apiFetch("GET", "/comments?page=" + encodeURIComponent(page), undefined, sync.etag ? { "If-None-Match": sync.etag } : {})
+      .then(function (r) {
+        if (destroyed || !REMOTE) return;
+        var status = r.res.status;
+        if (status === 401) { sync.token = null; ensureSession(true); return; }
+        if (status === 304) { sync.offline = false; syncChanged(); return; }
+        if (status !== 200 || !r.data || !Array.isArray(r.data.comments)) return;
+        sync.offline = false; syncChanged();
+        // A write acknowledged while this read was in flight may be missing
+        // from it; discard the snapshot and read again rather than regress.
+        if (sync.acks !== acks || PAGE !== localKey) { sync.etag = ""; setTimeout(poll, 0); return; }
+        sync.etag = r.res.headers.get("ETag") || "";
+        mergeServerPage(r.data.comments);
+      }, function () { if (!destroyed && REMOTE) { sync.offline = true; syncChanged(); } })
+      .finally(function () { sync.polling = false; });
+  }
+  // Re-render after background sync, keeping any reply/edit drafts intact.
+  var lastSyncSig = "";
+  function afterSync() {
+    if (!booted || destroyed) return;
+    var sig = JSON.stringify(pageComments().map(function (c) { return [c.id, c.updatedAt, c.status, c.text, c.replies.length, c.assignee && c.assignee.name]; }));
+    if (sig === lastSyncSig) return;
+    lastSyncSig = sig;
+    backgroundLoad();
+  }
+  function flushAll() {
+    if (!REMOTE) return Promise.resolve();
+    // An explicit submit ends any undo window.
+    var q = readQueue();
+    q.forEach(function (o) { o.nb = 0; });
+    writeQueue(q);
+    sync.held = false;
+    return new Promise(function (resolve, reject) {
+      sync.waiters.push({ resolve: resolve, reject: reject });
+      scheduleFlush(0);
+    });
   }
 
   // unique-ish css selector for an element (for re-anchoring overlays)
@@ -586,6 +1279,23 @@ const createController = function (host) {
   .an-rbadge { display:inline-flex; align-items:center; gap:3px; font:600 10px var(--an-font);
     color: var(--an-ok); }
   .an-rbadge svg { width:11px; height:11px; }
+  .an-sbadge { font:600 10px var(--an-font); color: var(--an-muted); }
+  .an-sbadge.an-s-in_progress { color: #0ea5e9; }
+  .an-assignee, .an-disposal { font-size:11px; color: var(--an-muted); margin:-3px 0 6px; }
+  .an-disposal { color: var(--an-ok); }
+  .an-card.an-unread { border-color: var(--an-btn-bg); }
+  .an-newpill { display:inline-block; border:0; border-radius:999px; margin:-2px 0 7px;
+    padding:2px 9px; font:600 10.5px var(--an-font); cursor:pointer;
+    background: var(--an-btn-bg); color: var(--an-btn-fg); }
+  .an-history { display:none; margin-top:8px; border-top:1px dashed var(--an-border); padding-top:7px; }
+  .an-history.an-show { display:block; }
+  .an-hlist { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:4px; }
+  .an-hlist li { display:flex; gap:8px; font-size:11.5px; line-height:1.4; color: var(--an-fg); }
+  .an-hwhen { color: var(--an-muted); margin-left:auto; flex:none; font-size:10.5px; }
+  .an-hnote { font-size:10.5px; color: var(--an-muted); margin-top:5px; }
+  select.an-status { border:1px solid var(--an-border); background: var(--an-surface);
+    border-radius:8px; padding:3px 6px; font:500 11.5px var(--an-font); cursor:pointer;
+    color: var(--an-muted); max-width:120px; }
   .an-quote { font-size:12px; color: var(--an-muted); background: var(--an-surface-2);
     border-left:3px solid var(--an-border-strong);
     padding:5px 9px; border-radius:0 6px 6px 0; margin:6px 0; line-height:1.45;
@@ -1468,6 +2178,18 @@ const createController = function (host) {
       cancel, save,
     ]));
     listen(save, "click", function () {
+      if (!state.author && hasInvite()) {
+        // An invite link names the reviewer through the session exchange,
+        // which may still be in flight: wait for it instead of asking. If it
+        // fails without a name, fall back to asking.
+        save.disabled = true;
+        ensureSession().then(null, function () {}).then(function () {
+          save.disabled = false;
+          if (state.author || !hasInvite()) save.click();
+          else askName(function () { save.click(); });
+        });
+        return;
+      }
       if (!state.author) { askName(function () { save.click(); }); return; }
       draft.author = state.author;
       draft.text = ta.value.trim();
@@ -1524,6 +2246,7 @@ const createController = function (host) {
       releaseTrap();
       wrap.remove();
       renderNote();
+      if (REMOTE && !sync.token) startSync();
       if (onDone) onDone();
     }
     listen(btn, "click", done);
@@ -1773,7 +2496,7 @@ const createController = function (host) {
 
     launchEl = el("button", { id: "__an_launch", class: SIDE, html: ICONS.bubble + "<span>Review</span>" });
     listen(launchEl, "click", function () {
-      if (!state.author) askName(function () { setEnabled(true); });
+      if (!state.author && !hasInvite() && !authHook) askName(function () { setEnabled(true); });
       else setEnabled(true);
     });
     ensureHost().appendChild(launchEl);
@@ -1853,8 +2576,14 @@ const createController = function (host) {
     listen(window, "resize", function () { clearTimeout(rt); rt = setTimeout(renderAll, 150); });
     // Keep tabs in sync: reload annotations when another tab writes to storage
     listen(window, "storage", function (e) {
-      if (e.key === STORE_KEY) loadData();
+      if (e.key === STORE_KEY) backgroundLoad();
+      else if (REMOTE && e.key === QUEUE_KEY) syncChanged();
     });
+    if (REMOTE) {
+      // Poll only while the page is visible; catch up as soon as it is.
+      listen(document, "visibilitychange", function () { if (!document.hidden) poll(); });
+      listen(window, "online", function () { sync.failures = 0; scheduleFlush(0); poll(); });
+    }
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { setTimeout(renderAll, 60); });
     listen(window, "load", function () { setTimeout(renderAll, 120); });
     // Keep overlays aligned after layout changes (lazy images, dynamic
@@ -2109,9 +2838,12 @@ const createController = function (host) {
   }
 
   var TYPE_LABEL = { highlight: "Highlight", shape: "Shape", pin: "Pin", pen: "Sketch", note: "Note", block: "Section" };
-  function visibleComments() {
+  function visibleComments(unread) {
+    unread = unread || {};
     return state.comments.filter(function (c) {
-      if (state.filter === "open" && c.resolved) return false;
+      // A comment the review owner just closed stays under Open until the
+      // reviewer has seen it, so a disposal is never silent.
+      if (state.filter === "open" && c.resolved && !unread[c.id]) return false;
       if (state.filter === "resolved" && !c.resolved) return false;
       if (state.query) {
         var hay = ((c.text || "") + " " + (c.author || "") + " " +
@@ -2123,10 +2855,45 @@ const createController = function (host) {
       return true;
     });
   }
+  // Background renders (sync merges, other tabs) must never eat what the
+  // reviewer is typing: open reply/edit boxes, their text, focus and caret
+  // are captured by comment id and restored on the rebuilt cards.
+  var preservingDrafts = false;
+  function captureDrafts() {
+    var drafts = {};
+    if (!preservingDrafts || !listEl) return drafts;
+    Array.prototype.forEach.call(listEl.querySelectorAll(".an-card"), function (card) {
+      var entry = {}, keep = false;
+      [["reply", ".an-replybox"], ["edit", ".an-editbox"]].forEach(function (pair) {
+        var box = card.querySelector(pair[1]), ta = box && box.querySelector("textarea");
+        if (!box || !ta || !box.classList.contains("an-show")) return;
+        entry[pair[0]] = { value: ta.value, focus: document.activeElement === ta,
+          start: ta.selectionStart, end: ta.selectionEnd };
+        keep = true;
+      });
+      if (keep) drafts[card.getAttribute("data-id")] = entry;
+    });
+    return drafts;
+  }
+  function restoreDraft(entry, box, ta) {
+    if (!entry) return;
+    box.classList.add("an-show");
+    ta.value = entry.value;
+    if (entry.focus) {
+      ta.focus({ preventScroll: true });
+      try { ta.setSelectionRange(entry.start, entry.end); } catch (e) {}
+    }
+  }
+  function backgroundLoad() {
+    preservingDrafts = true;
+    try { loadData(); } finally { preservingDrafts = false; }
+  }
   function renderPanel() {
     if (!listEl) return;
+    var drafts = captureDrafts();
     listEl.innerHTML = "";
-    var list = visibleComments();
+    var unread = unreadIds();
+    var list = visibleComments(unread);
     if (!list.length) {
       var msg = state.query
         ? "No comments match “" + esc(state.query) + "”."
@@ -2151,10 +2918,22 @@ const createController = function (host) {
           (function(){ var d = el("span",{class:"an-dot"}); d.style.background=c.color; return d; })(),
           document.createTextNode("#" + idx + " " + (TYPE_LABEL[c.type] || c.type)),
         ]),
-        c.resolved ? el("span", { class: "an-rbadge", html: ICONS.check + "<span>Resolved</span>" }) : null,
+        c.status === "resolved" ? el("span", { class: "an-rbadge", html: ICONS.check + "<span>Resolved</span>" })
+          : c.status !== "open" && STATUSES[c.status] ? el("span", { class: "an-sbadge an-s-" + c.status, text: STATUSES[c.status] }) : null,
         el("span", { class: "an-when", text: fmtTime(c.createdAt) }),
       ]);
       card.appendChild(meta);
+      if (unread[c.id]) {
+        card.classList.add("an-unread");
+        card.appendChild(el("button", { class: "an-newpill", title: "Mark as seen", text: "Updated · mark as seen", onclick: function (e) {
+          e.stopPropagation(); acknowledge(c.id); renderPanel();
+        } }));
+      }
+      if (c.assignee)
+        card.appendChild(el("div", { class: "an-assignee", text: "Assigned to " + c.assignee.name }));
+      if (c.resolved)
+        card.appendChild(el("div", { class: "an-disposal", text: STATUSES[c.status] +
+          (c.resolvedBy ? " by " + whoIs(c, c.resolvedBy) : "") + (c.resolvedAt ? " · " + fmtTime(c.resolvedAt) : "") }));
       if (c.type === "highlight" && c.anchor && c.anchor.exact)
         card.appendChild(el("div", { class: "an-quote", text: '“' + c.anchor.exact + '”' }));
       var bodyEl = el("div", { class: "an-body", text: c.text || "" });
@@ -2171,7 +2950,7 @@ const createController = function (host) {
               el("span", { class: "an-rwhen", text: fmtTime(r.createdAt) }),
             ]),
           ]);
-          if (r.author === state.author) {
+          if (isMine(r)) {
             var rAct = el("span", { style: "display:flex;gap:4px;flex:none;margin-left:6px" });
             var rDel = el("button", { class: "an-mini an-danger", html: ICONS.trash, title: "Delete reply" });
             listen(rDel, "click", function (e) {
@@ -2230,6 +3009,8 @@ const createController = function (host) {
       });
       card.appendChild(ebox);
 
+      var hbox = el("div", { class: "an-history" });
+      if (historyOpen[c.id]) { hbox.classList.add("an-show"); fillHistory(c, hbox); }
       var act = el("div", { class: "an-cact" }, [
         el("button", { class: "an-mini", html: ICONS.reply + "<span>Reply</span>", onclick: function (e) {
           e.stopPropagation(); rbox.classList.toggle("an-show"); rin.focus();
@@ -2239,26 +3020,143 @@ const createController = function (host) {
           var updated = patchComment(c.id, { resolved: !c.resolved });
           if (updated) { mergeComment(updated); renderAll(); renderPanel(); }
         } }),
-        c.author === state.author ? el("button", { class: "an-mini", html: ICONS.edit + "<span>Edit</span>", onclick: function (e) {
+        !REMOTE || isReviewAuthor() ? statusSelect(c) : null,
+        assignButton(c),
+        isMine(c) ? el("button", { class: "an-mini", html: ICONS.edit + "<span>Edit</span>", onclick: function (e) {
           e.stopPropagation();
           eta.value = c.text || "";
           ebox.classList.toggle("an-show");
           eta.focus();
         } }) : null,
+        el("button", { class: "an-mini an-histbtn", text: "History", "aria-expanded": historyOpen[c.id] ? "true" : "false", onclick: function (e) {
+          e.stopPropagation();
+          historyOpen[c.id] = !historyOpen[c.id];
+          if (historyOpen[c.id]) { hbox.classList.add("an-show"); fillHistory(c, hbox); }
+          else { delete historyOpen[c.id]; hbox.classList.remove("an-show"); }
+          this.setAttribute("aria-expanded", historyOpen[c.id] ? "true" : "false");
+        } }),
         el("button", { class: "an-mini", html: ICONS.link, title: "Copy link to this comment", onclick: function (e) {
           e.stopPropagation(); copyLink(c.id);
         } }),
-        el("button", { class: "an-mini an-danger", html: ICONS.trash, title: "Delete", onclick: function (e) {
+        canDelete(c) ? el("button", { class: "an-mini an-danger", html: ICONS.trash, title: "Delete", onclick: function (e) {
           e.stopPropagation(); deleteComment(c);
-        } }),
+        } }) : null,
       ]);
       card.appendChild(act);
+      card.appendChild(hbox);
 
       listen(card, "click", function () { focusComment(c.id, false); });
       listEl.appendChild(card);
+      // Restore after attaching: a detached textarea cannot take focus.
+      if (drafts[c.id]) {
+        restoreDraft(drafts[c.id].reply, rbox, rin);
+        if (isMine(c)) restoreDraft(drafts[c.id].edit, ebox, eta);
+      }
     });
     updateCount();
     renderFooter();
+  }
+
+  // Display name for a reviewer id seen on a comment. Anyone other than
+  // the reviewer who can touch a reviewer's comment is a review author.
+  function whoIs(c, id) {
+    if (id && id === state.authorId) return "you";
+    if (c.authorId === id) return c.author;
+    if (c.assignee && c.assignee.id === id) return c.assignee.name;
+    for (var i = c.replies.length - 1; i >= 0; i--) if (c.replies[i].authorId === id) return c.replies[i].author;
+    return "the review owner";
+  }
+
+  // HISTORY — a comment's lifecycle, oldest first. With a backend it is the
+  // server's activity log; locally (or offline) it is derived from the
+  // record's own timestamps, which keeps the latest of each transition.
+  var historyOpen = {}, historyCache = {};
+  function derivedHistory(c) {
+    var events = [{ at: c.createdAt, by: { id: c.authorId, name: c.author }, kind: "created" }];
+    if (c.editedAt) events.push({ at: c.editedAt, by: { id: c.authorId, name: c.author }, kind: "edited" });
+    if (c.assignedAt && c.assignee) events.push({ at: c.assignedAt, by: null, kind: "assigned", to: c.assignee });
+    c.replies.forEach(function (r) { events.push({ at: r.createdAt, by: { id: r.authorId, name: r.author }, kind: "replied" }); });
+    if (c.resolved && c.resolvedAt) events.push({ at: c.resolvedAt, by: c.resolvedBy ? { id: c.resolvedBy, name: whoIs(c, c.resolvedBy) } : null, kind: "status", to: c.status });
+    return events.sort(function (a, b) { return a.at < b.at ? -1 : a.at > b.at ? 1 : 0; });
+  }
+  function describeEvent(e) {
+    var mine = e.by && (e.by.id ? e.by.id === state.authorId : !state.authorId && e.by.name === state.author);
+    var who = !e.by ? "" : mine ? "You" : e.by.name || "Someone";
+    var label = function (s) { return STATUSES[s] || s; };
+    var what = {
+      created: "raised this comment",
+      edited: "edited the comment",
+      status: e.from ? "changed status: " + label(e.from) + " → " + label(e.to) : "marked it " + label(e.to),
+      assigned: e.to ? "assigned it to " + e.to.name : "removed the assignee",
+      replied: "replied",
+      reply_deleted: "deleted a reply",
+      deleted: "deleted the comment",
+    }[e.kind] || e.kind;
+    return (who ? who + " " : "") + (who ? what : what.charAt(0).toUpperCase() + what.slice(1));
+  }
+  function drawHistory(box, events, note) {
+    box.innerHTML = "";
+    var listNode = el("ol", { class: "an-hlist" });
+    events.forEach(function (e) {
+      listNode.appendChild(el("li", {}, [
+        el("span", { text: describeEvent(e) }),
+        el("span", { class: "an-hwhen", text: e.at ? fmtTime(e.at) : "" }),
+      ]));
+    });
+    box.appendChild(listNode);
+    if (note) box.appendChild(el("div", { class: "an-hnote", text: note }));
+  }
+  function fillHistory(c, box) {
+    var stamp = REMOTE ? serverStamps(dbRead())[c.id] : null;
+    if (!REMOTE || !stamp || !sync.token) {
+      drawHistory(box, derivedHistory(c), REMOTE ? "Full history appears once this comment is saved to the review." : "");
+      return;
+    }
+    var cached = historyCache[c.id];
+    if (cached && cached.stamp === stamp) { drawHistory(box, cached.events); return; }
+    drawHistory(box, derivedHistory(c), "Loading full history…");
+    apiFetch("GET", "/comments/" + encodeURIComponent(c.id) + "/activity").then(function (r) {
+      if (destroyed || !r.data || !Array.isArray(r.data.events)) throw new Error("unavailable");
+      var events = r.data.events.filter(function (e) { return e && typeof e.kind === "string" && typeof e.at === "string"; });
+      historyCache[c.id] = { stamp: stamp, events: events };
+      if (box.isConnected) drawHistory(box, events);
+    }).catch(function () {
+      if (!destroyed && box.isConnected) drawHistory(box, derivedHistory(c), "Showing a summary — the full history could not be loaded.");
+    });
+  }
+
+  // Lifecycle controls: the creator may move a comment between states;
+  // only review authors assign it. Only the creator edits it.
+  function setCommentStatus(id, status) {
+    if (!STATUSES[status]) throw new Error("Unknown status: " + status);
+    var updated = patchComment(id, { status: status });
+    if (updated) { mergeComment(updated); renderAll(); renderPanel(); }
+    return updated;
+  }
+  function setCommentAssignee(id, assignee) {
+    var updated = patchComment(id, { assignee: assignee || null });
+    if (updated) { mergeComment(updated); renderPanel(); }
+    return updated;
+  }
+  function statusSelect(c) {
+    var select = el("select", { class: "an-status", "aria-label": "Status", title: "Status" });
+    Object.keys(STATUSES).forEach(function (key) {
+      var option = el("option", { value: key, text: STATUSES[key] });
+      if (key === c.status) option.selected = true;
+      select.appendChild(option);
+    });
+    listen(select, "click", function (e) { e.stopPropagation(); });
+    listen(select, "change", function (e) { e.stopPropagation(); setCommentStatus(c.id, select.value); });
+    return select;
+  }
+  function assignButton(c) {
+    if (!isReviewAuthor()) return null;
+    var me = { id: state.authorId, name: state.author || "Anonymous" };
+    var mineNow = c.assignee && (c.assignee.id && me.id ? c.assignee.id === me.id : c.assignee.name === me.name);
+    return el("button", { class: "an-mini", text: mineNow ? "Unassign" : "Assign to me",
+      title: mineNow ? "Stop working on this" : "Take this on", onclick: function (e) {
+        e.stopPropagation(); setCommentAssignee(c.id, mineNow ? null : me);
+      } });
   }
 
   // --------------------------------------------------------------------------
@@ -2275,11 +3173,12 @@ const createController = function (host) {
     setTimeout(function () { URL.revokeObjectURL(url); objectUrls.delete(url); }, 1000);
   }
 
-  function buildExportPayload() {
-    var comments = state.comments.slice();
-    if (!comments.length) return null;
+  function buildExportPayload(allowEmpty) {
+    var comments = state.comments.map(serialize);
+    if (!comments.length && !allowEmpty) return null;
     return {
       annotate: VERSION,
+      schema: SCHEMA,
       kind: "annotate-export",
       exportedAt: new Date().toISOString(),
       page: PAGE,
@@ -2301,6 +3200,20 @@ const createController = function (host) {
     var stamp = new Date().toISOString().slice(0, 10);
     downloadJSON(payload, "annotate-" + slug + "-" + stamp + ".json");
     toast("Exported " + comments.length + " comment" + (comments.length === 1 ? "" : "s"), { kind: "success" });
+  }
+
+  // With a backend, submit means "every queued change is acknowledged";
+  // data-post-url, when also set, then receives the snapshot as in 1.4.
+  function submitAll() {
+    if (!REMOTE) return submitFeedback();
+    return flushAll().then(function () {
+      if (CFG.postUrl) return submitFeedback();
+      if (!destroyed) toast("All changes saved to the review", { kind: "success" });
+      return buildExportPayload(true);
+    }, function (error) {
+      if (!destroyed) toast("Could not save to the review: " + error.message, { kind: "error", duration: 8000 });
+      throw error;
+    });
   }
 
   var submitting = null, postController = null;
@@ -2437,7 +3350,7 @@ const createController = function (host) {
       if (seenIds[c.id]) { skipped++; return; }            // duplicate ID within the batch
       if (exists[c.id]) { skipped++; return; }             // already imported to this project (any page)
       seenIds[c.id] = true;
-      var copy = JSON.parse(JSON.stringify(c));
+      var copy = normalizeComment(serialize(c));
       copy.page = PAGE;
       prepared.push(copy);
     });
@@ -2452,6 +3365,7 @@ const createController = function (host) {
       // stay visible/exportable, and surface the unsaved banner.
       prepared.forEach(function (c) { unsaved[c.id] = c; });
     }
+    prepared.forEach(function (c) { remotePut(c, ["*"]); });
     loadData();
     var ok = prepared.length + (skipped ? " (" + skipped + " skipped)" : "");
     toast("Imported " + ok + " comment" + (prepared.length === 1 ? "" : "s"), { kind: "success" });
@@ -2472,7 +3386,7 @@ const createController = function (host) {
     state.comments = state.comments.filter(function (x) { return x.id !== c.id; });
     if (state.activeId === c.id) state.activeId = null;
     pendingDeletes[c.id] = c;
-    removeComment(c.id); // persist the deletion now
+    removeComment(c.id, UNDO_MS); // persist the deletion now; the server copy waits out the undo window
     renderAll(); renderPanel();
     toast("Comment deleted", {
       kind: "info", action: "Undo", duration: 5000,
@@ -2481,7 +3395,7 @@ const createController = function (host) {
         // click (or a stale activation) must no-op instead of re-inserting.
         if (!pendingDeletes[c.id]) return;
         delete pendingDeletes[c.id];
-        var restored = Object.assign({}, c, { replies: (c.replies || []).slice() });
+        var restored = serialize(c);
         // Only re-show the comment if we're still on the page it belongs to;
         // after an SPA route change it must be restored to storage without
         // leaking into the current route's list.
@@ -2502,6 +3416,7 @@ const createController = function (host) {
         if (!d.comments.some(function (x) { return x.id === restored.id; })) {
           d.comments.push(restored);
           dbWrite(d);
+          remoteRestore(restored);
         }
         renderAll(); renderPanel();
       },
@@ -2531,16 +3446,18 @@ const createController = function (host) {
     var n = state.comments.length;
     var canShare = !!(state.share && state.share.trim());
     footEl.innerHTML = "";
+    var syncNow = syncState();
     footEl.appendChild(el("div", { class: "an-localnote" }, [
       el("span", { html: ICONS.info }),
-      el("span", { text: canShare
+      REMOTE ? el("span", { id: "__an_syncnote", "data-state": syncNow.state, role: "status", text: SYNC_TEXT[syncNow.state] })
+        : el("span", { text: canShare
         ? "Saved in this browser. Download or share to send your comments."
         : "Saved in this browser. Download to send your comments." }),
     ]));
     footEl.appendChild(el("div", { class: "an-footrow" + (canShare ? " an-four" : "") }, [
       el("button", { class: "an-fbtn" + (n ? " an-pulse" : ""), title: "Download comments as JSON", html: ICONS.download + "<span>Download</span>", onclick: exportComments }),
       el("button", { class: "an-fbtn", title: "Copy comments as JSON", "aria-label": "Copy comments as JSON", html: ICONS.copy + "<span>Copy</span>", onclick: copyComments }),
-      CFG.postUrl ? el("button", { class: "an-fbtn", text: "Send feedback", onclick: function () { submitFeedback().catch(function () {}); } }) : null,
+      CFG.postUrl ? el("button", { class: "an-fbtn", text: "Send feedback", onclick: function () { submitAll().catch(function () {}); } }) : null,
       canShare ? el("button", { class: "an-fbtn", title: "Send comments to " + state.share, html: ICONS.share + "<span>Share</span>", onclick: shareComments }) : null,
       el("button", { class: "an-fbtn", html: ICONS.upload + "<span>Import</span>", onclick: pickImportFile }),
     ]));
@@ -2810,6 +3727,7 @@ const createController = function (host) {
   function boot() {
     if (destroyed || booted) return;
     booted = true;
+    captureInvite();
     buildUI();
     ensureOverlay();
     setupBlockPlus();
@@ -2824,6 +3742,7 @@ const createController = function (host) {
     // into review mode. All other embeds start as the collapsed Review pill.
     if (/^#an=./.test(location.hash) || CFG.startOpen) setEnabled(true);
     else setEnabled(false);
+    startSync();
   }
 
   function ensureEnabled() {
@@ -2843,13 +3762,19 @@ const createController = function (host) {
     enable: function () { setEnabled(true); },
     disable: function () { setEnabled(false); },
     setTool: function (t) { ensureEnabled(); setTool(t); },
-    refresh: function () { load(); },
-    comments: function () { return state.comments.slice(); },
+    refresh: function () {
+      load();
+      if (REMOTE) { sync.held = false; sync.etag = ""; ensureSession(!sync.token).then(function (t) { if (t) { scheduleFlush(0); poll(); } }, function () {}); }
+    },
+    comments: function () { return state.comments.map(serialize); },
     focus: function (id) { focusComment(id, false); },
     toast: toast,
     export: function () { exportComments(); },
     import: function () { pickImportFile(); },
-    submit: submitFeedback,
+    submit: submitAll,
+    setStatus: function (id, status) { return setCommentStatus(id, status); },
+    assign: function (id, assignee) { return setCommentAssignee(id, assignee); },
+    syncState: function () { return syncState(); },
     destroy: function () {
       if (destroyed) return;
       destroyed = true;
@@ -2859,18 +3784,29 @@ const createController = function (host) {
       timers.forEach(function (id) { window.clearTimeout(id); }); timers.clear();
       frames.forEach(function (id) { window.cancelAnimationFrame(id); }); frames.clear();
       if (postController) postController.abort();
+      stopSync();
       objectUrls.forEach(function (url) { URL.revokeObjectURL(url); }); objectUrls.clear();
       document.body && document.body.classList.remove("an-drawing", "an-highlighting");
       if (uiHost) uiHost.remove();
       var style = document.getElementById("__an_style"); if (style) style.remove();
     },
     clear: function () {
-      var d = dbRead();
-      d.comments = d.comments.filter(function (c) { return c.page !== PAGE; });
+      var d = dbRead(), removed = [];
+      // With a backend, clear() deletes only your own comments; everyone
+      // else's stay in the review.
+      d.comments = d.comments.filter(function (c) {
+        var drop = c && c.page === PAGE && (!REMOTE || isMine(c));
+        if (drop) removed.push(c.id);
+        return !drop;
+      });
       Object.keys(unsaved).forEach(function (id) {
-        if (unsaved[id] && unsaved[id].page === PAGE) delete unsaved[id];
+        if (unsaved[id] && unsaved[id].page === PAGE && (!REMOTE || isMine(unsaved[id]))) {
+          if (removed.indexOf(id) < 0) removed.push(id);
+          delete unsaved[id];
+        }
       });
       dbWrite(d);
+      removed.forEach(function (id) { remoteDelete(id, 0); });
       loadData();
     },
   };

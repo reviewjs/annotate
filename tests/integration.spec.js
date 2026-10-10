@@ -280,4 +280,31 @@ test.describe('public integration contract', () => {
     expect(url.searchParams.get('body')).toContain('Button label is unclear');
     expect(url.searchParams.get('count')).toBe('1');
   });
+  test('local mode shows a derived lifecycle history and no backend-only controls', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForFunction(() => !!window.Annotate);
+    await page.evaluate(() => {
+      window.Annotate.destroy();
+      localStorage.setItem('an-author', 'Dana');
+      localStorage.setItem('annotate:history-local', JSON.stringify({ comments: [{
+        id: 'hist-1', page: 'history-local:/', type: 'note', author: 'Dana', text: 'Typo in hero',
+        color: '#f59e0b', resolved: true, resolvedAt: '2026-01-03T00:00:00.000Z',
+        replies: [{ id: 'r1', author: 'Dana', text: 'Fixed', createdAt: '2026-01-02T00:00:00.000Z' }],
+        createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-03T00:00:00.000Z',
+      }] }));
+      window.Annotate.init({ project: 'history-local', startOpen: true }).open();
+    });
+    await page.locator('.an-chip[data-f="all"]').click();
+    const card = page.locator('.an-card', { hasText: 'Typo in hero' });
+    await expect(card.locator('.an-disposal')).toHaveText(/^Resolved/);
+    await expect(card.locator('.an-newpill')).toHaveCount(0);
+    await expect(card.locator('.an-mini', { hasText: 'Assign to me' })).toHaveCount(0);
+    await card.hover();
+    await card.locator('.an-histbtn').click();
+    await expect(card.locator('.an-hlist li')).toHaveCount(3);
+    await expect(card.locator('.an-hlist li').nth(0)).toContainText('You raised this comment');
+    await expect(card.locator('.an-hlist li').nth(1)).toContainText('You replied');
+    await expect(card.locator('.an-hlist li').nth(2)).toContainText('Marked it Resolved');
+    await page.evaluate(() => window.Annotate.destroy());
+  });
 });

@@ -13,6 +13,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  server:
+    name: Reference server and wire-protocol conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run server tests
+        run: npm run test:server
+
   test:
     name: Playwright (${{ matrix.project }})
     runs-on: ubuntu-latest
