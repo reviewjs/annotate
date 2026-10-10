@@ -46,6 +46,7 @@
     "demo": "npx serve . --listen 4200 --no-clipboard",
     "pages:build": "npm run build && rm -rf _site && mkdir -p _site && cp index.html annotate.js annotate.mjs annotate.d.ts annotate.d.mts annotate.d.cts logo.png og-image.png .nojekyll CNAME LICENSE README.md package.json _site/ && cp -R examples _site/examples",
     "deploy:pages": "npm run pages:build",
+    "version": "node scripts/set-version.mjs && npm run build && git add -A",
     "prepack": "npm run build",
     "publish:npm": "npm publish --access public",
     "test:server": "node --test scripts/tests/feedback-server.test.cjs scripts/tests/annotate-server.test.cjs",
