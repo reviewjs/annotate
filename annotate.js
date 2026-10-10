@@ -621,9 +621,9 @@
     return { state: s, pending: pending };
   }
   var SYNC_TEXT = {
-    idle: "Saved to the review. Only you and the review owner see your comments.",
-    pending: "Saving changes to the review…",
-    offline: "Offline — changes are kept here and sync when the connection returns.",
+    idle: "Sent to the review. The author sees your comments as you post them; there is nothing to submit.",
+    pending: "Sending to the review…",
+    offline: "Offline — changes are kept here and sent when the connection returns.",
     error: "Not signed in to the review — changes are kept on this device.",
   };
   function syncChanged() {
@@ -632,7 +632,11 @@
     if (sig === sync.state) return;
     sync.state = sig;
     var note = document.getElementById("__an_syncnote");
-    if (note) { note.textContent = SYNC_TEXT[s.state]; note.setAttribute("data-state", s.state); }
+    if (note) {
+      note.textContent = SYNC_TEXT[s.state]; note.setAttribute("data-state", s.state);
+      var row = note.parentNode;
+      if (row && row.classList) { row.classList.toggle("an-synced", s.state === "idle"); var ic = row.firstChild; if (ic && ic.innerHTML !== undefined) ic.innerHTML = s.state === "idle" ? ICONS.check : ICONS.info; }
+    }
     dispatch("annotate:sync", s);
   }
   function settleWaiters(error) {
@@ -659,15 +663,39 @@
 
   // Invite tokens arrive once in the URL; keep them for this review and strip
   // them so they are not bookmarked, shared or sent as a Referer.
+  //
+  // Many static sites serve "/" as a stub that meta-refreshes or script-
+  // redirects to the real landing page without the query string, and the
+  // stub has no annotate.js to capture the token. Browsers send that stub's
+  // full URL as the referrer of the page it lands on (Chromium, WebKit and
+  // Firefox all do, for meta refresh and script navigations), so the token
+  // is recovered from a same-origin referrer when the URL itself has none.
+  function inviteFromUrl(href) {
+    var u;
+    try { u = new URL(href); } catch (e) { return null; }
+    var token = u.searchParams.get(CFG.inviteParam);
+    if (!token && u.hash && u.hash.indexOf(CFG.inviteParam + "=") !== -1) {
+      try { token = new URLSearchParams(u.hash.slice(1)).get(CFG.inviteParam); } catch (e) {}
+    }
+    return token || null;
+  }
   function captureInvite() {
     if (!REMOTE || !CFG.inviteParam) return;
     var u;
     try { u = new URL(location.href); } catch (e) { return; }
-    var token = u.searchParams.get(CFG.inviteParam);
-    if (!token) return;
-    store.set(INVITE_KEY, token);
-    u.searchParams.delete(CFG.inviteParam);
-    try { window.history.replaceState(window.history.state, "", u.pathname + u.search + u.hash); } catch (e) {}
+    var token = inviteFromUrl(location.href);
+    if (token) {
+      store.set(INVITE_KEY, token);
+      u.searchParams.delete(CFG.inviteParam);
+      var hash = u.hash && u.hash.indexOf(CFG.inviteParam + "=") !== -1 ? "" : u.hash;
+      try { window.history.replaceState(window.history.state, "", u.pathname + u.search + hash); } catch (e) {}
+      return;
+    }
+    if (store.get(INVITE_KEY)) return;
+    var ref = document.referrer;
+    if (!ref || ref.indexOf(location.origin + "/") !== 0) return;
+    token = inviteFromUrl(ref);
+    if (token) store.set(INVITE_KEY, token);
   }
   function hasInvite() { return REMOTE && !!store.get(INVITE_KEY); }
 
@@ -691,7 +719,7 @@
       sync.token = null;
       p = apiFetch("POST", "/session", body).then(function (r) {
         if (r.res.status === 200 && r.data && typeof r.data.token === "string") { acceptSession(r.data); return sync.token; }
-        if (r.res.status === 403 || r.res.status === 404) { sessionRefused(r.data && r.data.error, !!invite); return null; }
+        if (r.res.status === 403 || r.res.status === 404) { sessionRefused(r.data && r.data.error, !!invite, r.data && r.data.message); return null; }
         throw new Error("HTTP " + r.res.status);
       });
     }
@@ -713,12 +741,24 @@
     syncChanged();
     if (booted) renderPanel();
   }
-  // The server refused this link: say so and fall back to local-only mode
-  // rather than degrading silently.
-  function sessionRefused(code, viaInvite) {
-    if (viaInvite) store.set(INVITE_KEY, "");
-    toast(viaInvite || code === "invite_invalid" ? "This review link is no longer valid. Comments stay in this browser only."
-      : "Could not join the review (" + (code || "refused") + "). Comments stay in this browser only.", { kind: "error", duration: 8000 });
+  // The server refused: say why in the reviewer's terms and what to do next,
+  // then fall back to local-only mode rather than degrading silently. The
+  // reason stays in the panel footer, not just in a toast.
+  var REFUSALS = {
+    invite_invalid: "This review needs a personal invite link, and this page was opened without one (or with an incomplete one). Ask the review's author for your link and open the site through it.",
+    invite_revoked: "The review's author revoked your link. Ask them for a new one.",
+    invite_expired: "Your review link has expired. Ask the review's author for a new one.",
+    review_closed: "The author has closed this review; it no longer accepts feedback.",
+    review_not_found: "This review no longer exists on the server.",
+    origin_not_allowed: "This page's address isn't registered for the review. Open the exact link you were sent, or ask the author to add this address.",
+  };
+  var KEEP_LOCAL = "Your comments stay in this browser. Use Download or Copy below and email them to the author.";
+  function sessionRefused(code, viaInvite, message) {
+    // A closed review may be reopened; keep the link so a reload then just works.
+    if (viaInvite && code !== "review_closed") store.set(INVITE_KEY, "");
+    var why = REFUSALS[code] || (typeof message === "string" && message.trim()) || "The review did not accept this browser (" + (code || "refused") + ").";
+    sync.refusal = why;
+    toast(why + " " + KEEP_LOCAL, { kind: "error", duration: 12000 });
     goLocal();
   }
   function goLocal() {
@@ -1373,6 +1413,10 @@
   #__an_foot .an-localnote { display:flex; align-items:center; gap:7px;
     font-size:11.5px; color: var(--an-muted); }
   #__an_foot .an-localnote svg { width:14px; height:14px; flex:none; }
+  #__an_foot .an-localnote.an-synced { color: var(--an-ok); }
+  #__an_foot .an-localnote.an-refused { align-items:flex-start; color: var(--an-danger); }
+  #__an_foot .an-localnote.an-refused svg { margin-top:2px; }
+  #__an_foot .an-exportlbl { font:600 10.5px var(--an-font); letter-spacing:.06em; text-transform:uppercase; color: var(--an-muted); margin:8px 0 -2px; }
   #__an_foot .an-footrow { display:flex; gap:8px; }
   #__an_foot .an-footrow.an-four { flex-wrap:wrap; }
   #__an_foot .an-fbtn { flex:1; border:1px solid var(--an-border-strong);
@@ -3494,15 +3538,17 @@
     var canShare = !!(state.share && state.share.trim());
     footEl.innerHTML = "";
     var syncNow = syncState();
-    footEl.appendChild(el("div", { class: "an-localnote" }, [
-      el("span", { html: ICONS.info }),
+    footEl.appendChild(el("div", { class: "an-localnote" + (sync.refusal ? " an-refused" : REMOTE && syncNow.state === "idle" ? " an-synced" : "") }, [
+      el("span", { html: sync.refusal ? ICONS.alert : REMOTE && syncNow.state === "idle" ? ICONS.check : ICONS.info }),
       REMOTE ? el("span", { id: "__an_syncnote", "data-state": syncNow.state, role: "status", text: SYNC_TEXT[syncNow.state] })
-        : el("span", { text: canShare
+        : el("span", { id: "__an_localnote", role: "status", text: sync.refusal ? sync.refusal + " " + KEEP_LOCAL : canShare
         ? "Saved in this browser. Download or share to send your comments."
         : "Saved in this browser. Download to send your comments." }),
     ]));
+    if (REMOTE) footEl.appendChild(el("div", { class: "an-exportlbl", text: "Keep a copy" }));
     footEl.appendChild(el("div", { class: "an-footrow" + (canShare ? " an-four" : "") }, [
-      el("button", { class: "an-fbtn" + (n ? " an-pulse" : ""), title: "Download comments as JSON", html: ICONS.download + "<span>Download</span>", onclick: exportComments }),
+      // The pulse asks for action; in a synced review there is none to take.
+      el("button", { class: "an-fbtn" + (n && !REMOTE ? " an-pulse" : ""), title: "Download comments as JSON", html: ICONS.download + "<span>Download</span>", onclick: exportComments }),
       el("button", { class: "an-fbtn", title: "Copy comments as JSON", "aria-label": "Copy comments as JSON", html: ICONS.copy + "<span>Copy</span>", onclick: copyComments }),
       CFG.postUrl ? el("button", { class: "an-fbtn", text: "Send feedback", onclick: function () { submitAll().catch(function () {}); } }) : null,
       canShare ? el("button", { class: "an-fbtn", title: "Send comments to " + state.share, html: ICONS.share + "<span>Share</span>", onclick: shareComments }) : null,

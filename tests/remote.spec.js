@@ -119,11 +119,62 @@ test('commenting before the invite exchange returns waits for it instead of aski
   await expect(page.locator('#__an_namewrap')).toHaveCount(0);
 });
 
-test('revoked invite falls back to local-only mode with a visible message', async ({ page }) => {
+test('an invite link that lands on a stub which redirects without the query string still signs the reviewer in', async ({ page, browserName }) => {
+  for (const mode of ['js', 'meta']) {
+    const route = fixturePath();
+    await page.addInitScript(() => {
+      window.__events = [];
+      ['annotate:auth', 'annotate:sync'].forEach(name => window.addEventListener(name, e => window.__events.push({ name, detail: e.detail })));
+    });
+    const query = new URLSearchParams({ api, review: REVIEW, page: route, an_invite: 'inv_alice', mode });
+    await page.goto('/tests/fixtures/redirect?' + query);
+    await page.waitForFunction(() => location.pathname.startsWith('/tests/fixtures/remote') && !!window.Annotate);
+    expect(new URL(page.url()).searchParams.get('an_invite')).toBeNull();
+    await page.evaluate(() => window.Annotate.open());
+    await waitForAuth(page);
+    const auth = await page.evaluate(() => window.__events.find(e => e.name === 'annotate:auth').detail);
+    expect(auth.reviewer.id, mode).toBe('rvr_alice');
+    expect(await page.evaluate(id => localStorage.getItem('annotate:invite:' + id), REVIEW)).toBe('inv_alice');
+    await page.evaluate(id => localStorage.removeItem('annotate:invite:' + id), REVIEW);
+  }
+});
+
+test('a referrer from another origin never supplies an invite', async ({ page }) => {
+  const route = fixturePath();
+  await page.setExtraHTTPHeaders({ Referer: 'https://elsewhere.example/?an_invite=inv_alice' });
+  await openReview(page, route);
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(id => localStorage.getItem('annotate:invite:' + id), REVIEW)).toBeNull();
+  expect(await page.evaluate(() => window.__events.some(e => e.name === 'annotate:auth'))).toBe(false);
+  await page.setExtraHTTPHeaders({});
+});
+
+test('revoked invite falls back to local-only mode and says why, in the toast and the footer', async ({ page }) => {
   const route = fixturePath();
   await openReview(page, route, { invite: 'inv_revoked' });
-  await expect(page.locator('.an-toast', { hasText: 'no longer valid' })).toBeVisible();
+  await expect(page.locator('.an-toast', { hasText: 'revoked your link' })).toBeVisible();
+  await expect(page.locator('.an-toast', { hasText: 'email them to the author' })).toBeVisible();
   await expect(page.locator('#__an_syncnote')).toHaveCount(0);
+  await expect(page.locator('#__an_localnote')).toContainText('revoked your link');
+  await expect(page.locator('#__an_localnote')).toContainText('Download or Copy');
+  expect(await page.evaluate(() => window.Annotate.syncState().state)).toBe('local');
+});
+
+test('a page opened without an invite explains that a link is needed when the reviewer gives a name', async ({ page }) => {
+  const route = fixturePath();
+  await openReview(page, route);
+  await page.keyboard.press('p');
+  await page.locator('#para').click();
+  const composer = page.locator('#__an_compose');
+  await composer.locator('textarea').fill('Opened without a link');
+  await composer.locator('.an-primary').click();
+  const modal = page.locator('#__an_namewrap');
+  await expect(modal).toBeVisible();
+  await modal.locator('input').fill('Walk-in');
+  await modal.locator('button', { hasText: 'Start reviewing' }).click();
+  await expect(page.locator('.an-toast', { hasText: 'needs a personal invite link' })).toBeVisible();
+  await expect(page.locator('.an-toast', { hasText: "Ask the review's author" })).toBeVisible();
+  await expect(page.locator('#__an_localnote')).toContainText('needs a personal invite link');
   expect(await page.evaluate(() => window.Annotate.syncState().state)).toBe('local');
 });
 
@@ -156,7 +207,9 @@ test('reviewer lifecycle: private comments, owner addresses and disposes, review
     await openReview(bob, route, { invite: 'inv_bob' });
     await openReview(owner, route, { invite: 'inv_owner' });
     await Promise.all([waitForAuth(alice), waitForAuth(bob), waitForAuth(owner)]);
-    await expect(alice.locator('#__an_syncnote')).toContainText('Only you and the review owner');
+    await expect(alice.locator('#__an_syncnote')).toContainText('Sent to the review');
+    await expect(alice.locator('#__an_foot .an-localnote')).toHaveClass(/an-synced/);
+    await expect(alice.locator('#__an_foot .an-fbtn.an-pulse')).toHaveCount(0);
 
     await addPin(alice, 'Alice private concern');
     await addPin(bob, 'Bob private concern');

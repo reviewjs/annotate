@@ -136,6 +136,37 @@ TypeScript declarations are included in the package.
 
 ---
 
+### Hosted reviews (`data-api`)
+
+With a reviewjs backend, comments sync to a review instead of staying in the
+browser. The author's dashboard hands out this tag and the invite links:
+
+```html
+<script src="https://app.reviewjs.com/annotate.js"
+        data-api="https://app.reviewjs.com"
+        data-review-id="rvw_…" defer></script>
+```
+
+| Attribute | Meaning |
+|---|---|
+| `data-api` | The backend origin. Without it the page stays local-only, exactly as above. |
+| `data-review-id` | The review this page belongs to. |
+
+Reviewers arrive through a personal link, `https://your-site/page?an_invite=…`.
+The token is stored for that review in the reviewer's browser and removed from
+the address bar, then exchanged for a 24-hour session on every load. Only the
+site addresses registered on the review may use it.
+
+- If the landing page forwards to another page before annotate.js runs (a `/`
+  stub with a meta refresh, a script redirect) and drops the query string, the
+  token is recovered from the same-origin referrer, so the link still works.
+  Cross-origin referrers are never used.
+- When the backend refuses (link revoked or expired, review closed, address not
+  registered, or no link at all), the panel says why and what to do next, and
+  comments stay in the browser; Download or Copy sends them by email.
+- In a synced review there is nothing to submit: the footer reads "Sent to the
+  review" as soon as a comment is posted.
+
 ## Framework integration
 
 For a bundler, install `@reviewjs/annotate`, call `init()` after mount, and

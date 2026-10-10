@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Stub that drops the query string</title>
+  <!-- Like a static site's "/" page: forwards to the real page WITHOUT the
+       query string, so ?an_invite= is lost on the hop. No annotate.js here. -->
+  <script>
+    var u = new URL(location.href);
+    var mode = u.searchParams.get('mode') || 'js';
+    u.searchParams.delete('an_invite');
+    u.searchParams.delete('mode');
+    var target = '/tests/fixtures/remote' + u.search;
+    if (mode === 'meta') {
+      var m = document.createElement('meta');
+      m.httpEquiv = 'refresh';
+      m.content = '0; url=' + target;
+      document.head.appendChild(m);
+    } else {
+      location.replace(target);
+    }
+  </script>
+</head>
+<body><p>Redirecting…</p></body>
+</html>
