@@ -29,7 +29,7 @@ function annotatejs_enqueue() {
 		'annotatejs',
 		'https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js',
 		array(),     // no dependencies
-		'1.5.1',     // version (also busts caches)
+		'1.5.3',     // version (also busts caches)
 		true         // load in the footer
 	);
 }
