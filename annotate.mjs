@@ -2147,6 +2147,10 @@ const createController = function (host) {
     ensureHost().appendChild(composer);
     listen(document, "pointerdown", function (e) {
       if (performance.now() - composerShownAt < 120) return;
+      // The name dialog opens over a draft whose Comment asked for a name;
+      // using the dialog must not cancel that draft.
+      var nameWrap = document.getElementById("__an_namewrap");
+      if (nameWrap && nameWrap.contains(e.target)) return;
       if (composer.classList.contains("an-show") && !composer.contains(e.target))
         cancelDraft();
     });
@@ -2320,7 +2324,9 @@ const createController = function (host) {
   function onDown(e) {
     if (!state.enabled) return;
     if (e.button !== 0 && e.pointerType === "mouse") return;
-    if (e.target.closest && (e.target.closest("#__an_bar") || e.target.closest("#__an_panel") || e.target.closest("#__an_compose") || e.target.closest("#__an_toasts")))
+    // The name dialog too: a click there must not start a new pin or shape
+    // over the draft that is waiting for the name.
+    if (e.target.closest && (e.target.closest("#__an_bar") || e.target.closest("#__an_panel") || e.target.closest("#__an_compose") || e.target.closest("#__an_toasts") || e.target.closest("#__an_namewrap")))
       return;
     var t = state.tool;
     if (t === "pin") {

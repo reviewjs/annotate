@@ -2052,3 +2052,54 @@ test.describe('Review fixes', () => {
     expect(res.after).toBe(false);
   });
 });
+
+// A reviewer with no stored name comments first: Comment opens the name
+// dialog over the pending draft. Using the dialog with the mouse must not drop
+// that draft. It used to: with the pin (or a shape) tool active, a click on
+// the dialog started a new draft, and with the cursor tool the composer's
+// click-outside handler cancelled it.
+test.describe('first comment before a name is set', () => {
+  for (const kind of ['pin', 'highlight']) {
+    for (const how of ['clicks Start reviewing', 'clicks into the field and presses Enter']) {
+      test(`a ${kind} draft is posted when the reviewer ${how}`, async ({ page }) => {
+        await page.goto('/tests/fixtures/remote?page=/first-comment');
+        await clearStorage(page);
+        await page.reload();
+        await page.waitForFunction(() => !!window.Annotate);
+        if (kind === 'pin') {
+          await page.keyboard.press('p');
+          await page.locator('#title').click();
+        } else {
+          await page.evaluate(() => {
+            const range = document.createRange();
+            range.selectNodeContents(document.getElementById('para'));
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+          });
+          await page.locator('#para').dispatchEvent('pointerup');
+        }
+        const composer = page.locator('#__an_compose');
+        await expect(composer).toHaveClass(/an-show/);
+        await composer.locator('textarea').fill('My first comment');
+        await composer.locator('.an-primary').click();
+        const modal = page.locator('#__an_namewrap');
+        await expect(modal).toBeVisible();
+        const input = modal.locator('input').first();
+        await input.click();
+        await input.fill('First Timer');
+        if (how.startsWith('clicks Start')) await modal.getByRole('button', { name: 'Start reviewing' }).click();
+        else await input.press('Enter');
+        await expect(modal).toHaveCount(0);
+        await expect.poll(() => page.evaluate(() => window.Annotate.comments().length)).toBe(1);
+        const [comment] = await page.evaluate(() => window.Annotate.comments());
+        expect(comment.type).toBe(kind);
+        expect(comment.author).toBe('First Timer');
+        expect(comment.text).toBe('My first comment');
+        await expect(composer).not.toHaveClass(/an-show/);
+        await page.evaluate(() => window.Annotate.open());
+        await expect(page.locator('.an-card', { hasText: 'My first comment' })).toHaveCount(1);
+      });
+    }
+  }
+});
