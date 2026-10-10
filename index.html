@@ -4,18 +4,18 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>annotate.js — turn any website into a review board</title>
-<meta name="description" content="A drop-in visual review layer for any website. Highlight, draw, pin and comment right on the live page. Open source, local-first, one script tag. Optional feedback endpoint." />
+<meta name="description" content="A drop-in visual review layer for any website. Highlight, draw, pin and comment right on the live page. Open source, local-first, one script tag. Optional feedback endpoint or self-hosted review backend." />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://reviewjs.com/" />
 <meta property="og:title" content="Annotate.js — turn any website into a review board" />
-<meta property="og:description" content="A drop-in visual review layer for any website. Highlight, draw, pin and comment right on the live page. Open source, local-first, one script tag. Optional feedback endpoint." />
+<meta property="og:description" content="A drop-in visual review layer for any website. Highlight, draw, pin and comment right on the live page. Open source, local-first, one script tag. Optional feedback endpoint or self-hosted review backend." />
 <meta property="og:image" content="https://reviewjs.github.io/annotate/og-image.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
 <meta property="og:image:alt" content="Annotate.js landing page preview" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="Annotate.js — turn any website into a review board" />
-<meta name="twitter:description" content="A drop-in visual review layer for any website. Highlight, draw, pin and comment right on the live page. Open source, local-first, one script tag. Optional feedback endpoint." />
+<meta name="twitter:description" content="A drop-in visual review layer for any website. Highlight, draw, pin and comment right on the live page. Open source, local-first, one script tag. Optional feedback endpoint or self-hosted review backend." />
 <meta name="twitter:image" content="https://reviewjs.github.io/annotate/og-image.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -233,6 +233,15 @@
   .share-method p{font-size:13px;line-height:1.45;color:var(--muted-2);margin:0}
   .share-method code{font-family:var(--mono);font-size:12px;color:var(--ink-dark)}
   .share-steps{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:34px}
+  .share-sync{display:grid;grid-template-columns:1fr 1.15fr;gap:28px;align-items:center;margin-top:46px;padding:26px;border:1px solid var(--line-2);border-radius:8px;background:#f4f6fa}
+  .share-sync .label{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--violet)}
+  .share-sync h3{font-size:20px;font-weight:800;margin:10px 0 8px;letter-spacing:0}
+  .share-sync p{font-size:14px;line-height:1.55;color:var(--muted-2);margin:0 0 10px}
+  .share-sync p:last-child{margin-bottom:0}
+  .share-sync p code{font-family:var(--mono);font-size:12.5px;color:var(--ink-dark)}
+  .share-sync a{color:var(--violet);font-weight:700}
+  .share-sync pre{margin:0;background:var(--ink-dark);border-radius:8px;padding:18px;overflow-x:auto}
+  .share-sync pre code{font-family:var(--mono);font-size:12.5px;line-height:1.65;color:#e6e6ea;white-space:pre}
   .share-step{padding-top:18px;border-top:2px solid var(--line-2)}
   .share-step .n{font-family:var(--mono);font-size:12px;color:var(--violet);font-weight:700}
   .share-step h4{font-size:15px;font-weight:800;margin:8px 0 5px}
@@ -336,6 +345,7 @@
     .grid-3,.uc-grid{grid-template-columns:1fr 1fr}
     .reason-grid{grid-template-columns:1fr 1fr}
     .share-steps{grid-template-columns:1fr 1fr}
+    .share-sync{grid-template-columns:1fr}
     .foot{grid-template-columns:1fr 1fr}
   }
   @media(max-width:680px){
@@ -536,21 +546,23 @@
       <div class="why-side reveal">
         <div class="eyebrow">02 — Why reviewjs</div>
         <h2 class="sh">The right amount of tool</h2>
-        <p class="section-lead">It lives in the browser and exports JSON. Add your own feedback endpoint when you want reviewers to send comments directly.</p>
+        <p class="section-lead">It lives in the browser and exports JSON. Add a feedback endpoint to receive comments directly, or your own backend to collect every reviewer’s comments in one place.</p>
         <div class="stat-grid">
           <div class="stat"><div class="v">~40KB</div><div class="l">Minified + gzipped</div></div>
           <div class="stat"><div class="v">0</div><div class="l">Dependencies</div></div>
           <div class="stat"><div class="v">1</div><div class="l">Script tag to install</div></div>
-          <div class="stat"><div class="v">100%</div><div class="l">Local · nothing leaves</div></div>
+          <div class="stat"><div class="v">100%</div><div class="l">Local by default</div></div>
         </div>
       </div>
       <div class="reason-grid">
         <div class="reason reveal"><span class="ric"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 18l6-6-6-6"/><path d="M8 6l-6 6 6 6"/></svg></span><h3>One script tag</h3><p>No build step, no framework, no signup. Paste a line, reload, review.</p></div>
         <div class="reason reveal"><span class="ric"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z"/></svg></span><h3>Works everywhere</h3><p>Plain HTML, React, Vue, Svelte, WordPress, Webflow, Shopify, static sites.</p></div>
-        <div class="reason reveal"><span class="ric"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></span><h3>Local-first &amp; private</h3><p>Comments stay on the reviewer’s device until they export or send feedback.</p></div>
+        <div class="reason reveal"><span class="ric"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></span><h3>Local-first &amp; private</h3><p>Without a backend, comments stay on the reviewer’s device until they export or send feedback.</p></div>
         <div class="reason reveal"><span class="ric"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M5 21h14"/></svg></span><h3>Portable</h3><p>Reviewers export feedback as JSON and send it; you import it with one click.</p></div>
         <div class="reason reveal"><span class="ric"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 18l-5.8 3 1.1-6.5L2.6 9.8l6.5-.9z"/></svg></span><h3>Polished UI</h3><p>Floating toolbar, Figma-style comments panel, auto light/dark, full shortcuts.</p></div>
         <div class="reason reveal"><span class="ric"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h7l-1 8 10-12h-7z"/></svg></span><h3>Dependency-free</h3><p>Vanilla JavaScript, zero runtime dependencies, every evergreen browser.</p></div>
+        <div class="reason reveal"><span class="ric"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg></span><h3>Tracked to done</h3><p>Mark comments Open, In progress, Resolved or Won’t fix, assign them, and see each one’s history.</p></div>
+        <div class="reason reveal"><span class="ric"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.5 6.2"/><path d="M3 12A9 9 0 0 1 18.5 5.8"/><path d="M18 2v4h-4"/><path d="M6 22v-4h4"/></svg></span><h3>Optional backend sync</h3><p>Point it at a server you host and every reviewer’s comments land in one review. Invite links, no accounts.</p></div>
       </div>
     </div>
 
@@ -574,7 +586,7 @@
   <div class="head reveal">
     <div class="eyebrow">03 — Sharing</div>
     <h2 class="sh">Your feedback never leaves the page</h2>
-    <p class="section-lead">There’s no server and no database — every comment is saved to <span style="font-family:var(--mono);font-size:15px;color:var(--ink-dark)">localStorage</span> on the reviewer’s own device. Sharing is one explicit, privacy-friendly round-trip.</p>
+    <p class="section-lead">No server and no database required — by default every comment is saved to <span style="font-family:var(--mono);font-size:15px;color:var(--ink-dark)">localStorage</span> on the reviewer’s own device. Sharing is one explicit, privacy-friendly round-trip.</p>
   </div>
 
   <div class="diagram reveal">
@@ -628,6 +640,21 @@
     <div class="share-step reveal"><div class="n">03</div><h4>Send it</h4><p>Email or Slack the JSON file to whoever owns the page.</p></div>
     <div class="share-step reveal"><div class="n">04</div><h4>Import</h4><p>Open the same page, import the file — notes reappear in place.</p></div>
   </div>
+
+  <div class="share-sync reveal">
+    <div>
+      <div class="label">Optional · self-hosted</div>
+      <h3>Or collect every comment on your own server</h3>
+      <p>Set <code>data-api</code> and <code>data-review-id</code>, and comments sync to a server you run. Reviewers join through an invite link and see their own notes plus your replies; you see all of them. Changes made offline are queued and sent when the connection returns.</p>
+      <p>Start from the dependency-free <a href="./examples/annotate-server.cjs">reference server</a>. Leave both attributes off and nothing is sent anywhere.</p>
+    </div>
+    <pre><code>&lt;script
+  src="https://cdn.jsdelivr.net/npm/@reviewjs/annotate/annotate.js"
+  data-api="https://reviews.example.com"
+  data-review-id="homepage-redesign"
+  defer
+&gt;&lt;/script&gt;</code></pre>
+  </div>
 </section>
 
 <!-- ===== COMPARISON ===== -->
@@ -648,14 +675,14 @@
           <tr><td class="row-lbl">Open source</td><td class="us"><span class="yes">Yes</span></td><td><span class="no">No</span></td><td><span class="no">No</span></td><td><span class="no">No</span></td><td><span class="no">No</span></td></tr>
           <tr><td class="row-lbl">Reviewer login required</td><td class="us"><span class="yes">None</span></td><td><span class="no">Account</span></td><td><span class="no">Account</span></td><td><span class="mid">Portal</span></td><td><span class="mid">Guest friction</span></td></tr>
           <tr><td class="row-lbl">Install</td><td class="us"><span class="yes">1 script tag</span></td><td>Extension</td><td>Script + extension</td><td>SDK / widget</td><td>Proxy / link</td></tr>
-          <tr><td class="row-lbl">Where feedback lives</td><td class="us"><span class="yes">Your browser</span></td><td><span class="no">Vendor cloud</span></td><td><span class="no">Vendor cloud</span></td><td><span class="no">Vendor cloud</span></td><td><span class="no">Vendor cloud</span></td></tr>
+          <tr><td class="row-lbl">Where feedback lives</td><td class="us"><span class="yes">Your browser or your server</span></td><td><span class="no">Vendor cloud</span></td><td><span class="no">Vendor cloud</span></td><td><span class="no">Vendor cloud</span></td><td><span class="no">Vendor cloud</span></td></tr>
           <tr><td class="row-lbl">Works offline / self-host</td><td class="us"><span class="yes">Yes</span></td><td><span class="no">No</span></td><td><span class="no">No</span></td><td><span class="no">No</span></td><td><span class="no">No</span></td></tr>
           <tr><td class="row-lbl">Visual tools (draw/pin/ink)</td><td class="us"><span class="yes">Full set</span></td><td><span class="mid">Pin + box</span></td><td><span class="mid">Pin + box</span></td><td><span class="mid">Pin + draw</span></td><td><span class="mid">Pin + box</span></td></tr>
           <tr><td class="row-lbl">Runtime dependencies</td><td class="us"><span class="yes">None</span></td><td>Hosted app</td><td>Hosted app</td><td>Hosted app</td><td>Hosted app</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="cmp-note">Competitor pricing and capabilities are approximate, based on publicly listed 2026 plans, and change often. The honest trade-off: SaaS tools add cloud sync, real-time multiplayer and built-in Jira/Asana sync that annotate.js leaves to your own workflow. annotate.js is for teams who’d rather own a tiny, private layer than rent a heavy one.</p>
+    <p class="cmp-note">Competitor pricing and capabilities are approximate, based on publicly listed 2026 plans, and change often. The honest trade-off: SaaS tools add hosted sync, real-time multiplayer and built-in Jira/Asana integrations. annotate.js can sync to a backend you host, and leaves the rest to your own workflow. annotate.js is for teams who’d rather own a tiny, private layer than rent a heavy one.</p>
   </div>
 </section>
 
@@ -754,7 +781,7 @@
   <div class="faq-list reveal">
     <details class="faq" open>
       <summary>Where are comments stored? <span class="pm"><svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span></summary>
-      <div class="ans">In the reviewer’s own browser via <code>localStorage</code>, namespaced by project and page. Reviewers can export JSON, or use Send feedback if you configure an endpoint. Sending happens only when they choose it.</div>
+      <div class="ans">In the reviewer’s own browser via <code>localStorage</code>, namespaced by project and page. Reviewers can export JSON, or use Send feedback if you configure an endpoint. Sending happens only when they choose it. If you set <code>data-api</code>, comments sync to your own review backend instead.</div>
     </details>
     <details class="faq">
       <summary>Does it work with my framework? <span class="pm"><svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span></summary>
@@ -771,6 +798,10 @@
     <details class="faq">
       <summary>What does it cost? <span class="pm"><svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span></summary>
       <div class="ans">Nothing. annotate.js is open source under the MIT license, free for personal and commercial use. No seats, no projects limit, no trial clock.</div>
+    </details>
+    <details class="faq">
+      <summary>Can I collect comments from many reviewers in one place? <span class="pm"><svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span></summary>
+      <div class="ans">Yes, with a backend you host. Add <code>data-api</code> and <code>data-review-id</code> to the script tag, and every reviewer’s comments sync to it. Reviewers join through an invite link or your own auth. Each reviewer sees only their own comments and your replies; as the review owner you see everything, set statuses and assign work. The repository includes a dependency-free reference server to start from.</div>
     </details>
     <details class="faq">
       <summary>Which browsers are supported? <span class="pm"><svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span></summary>
@@ -801,7 +832,7 @@
       <button class="btn btn-primary" data-copy="install">Copy the snippet</button>
       <a class="btn btn-outline" href="https://github.com/reviewjs/annotate" target="_blank" rel="noopener noreferrer">Read the docs</a>
     </div>
-    <p class="fine">Feedback stays in the browser until a reviewer sends it · every evergreen browser · no account required</p>
+    <p class="fine">Local by default · every evergreen browser · no account required</p>
   </div>
 </section>
 
@@ -812,7 +843,7 @@
       <a class="logo" href="#top" aria-label="annotate.js home">
         <img src="./logo.png" alt="Annotate.js" width="3024" height="582" />
       </a>
-      <p>A drop-in visual review &amp; annotation layer for any website. Local-first, with an optional feedback endpoint.</p>
+      <p>A drop-in visual review &amp; annotation layer for any website. Local-first, with an optional feedback endpoint or review backend.</p>
     </div>
     <div class="col">
       <h4>Product</h4>
