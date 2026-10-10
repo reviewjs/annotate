@@ -1,6 +1,6 @@
 {
   "name": "@reviewjs/annotate",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "A drop-in visual review and annotation layer for any website. Store comments locally, export JSON, or send feedback to your own endpoint.",
   "main": "annotate.js",
   "module": "annotate.mjs",
