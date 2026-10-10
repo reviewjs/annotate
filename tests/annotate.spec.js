@@ -1055,7 +1055,7 @@ test.describe('Theme', () => {
 test.describe('Public API (window.Annotate)', () => {
   test('exposes version', async ({ page }) => {
     const version = await page.evaluate(() => window.Annotate.version);
-    expect(version).toBe('1.5.0');
+    expect(version).toBe('1.5.1');
   });
 
   test('open() / close() control the panel', async ({ page }) => {
