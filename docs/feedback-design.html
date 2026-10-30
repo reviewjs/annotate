@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Feedback lifecycle · Annotate design review</title>
+<style>
+  :root { --paper:#fff; --canvas:#f3f5f9; --ink:#202736; --muted:#5b6576; --line:#d8dfeb; --violet:#6233c5; --wash:#f0eafb; --yellow:#ffe083; --green:#176446; --red:#a03532; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--canvas); color:var(--ink); font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  button,input,textarea,select { font:inherit; }
+  button,a { -webkit-tap-highlight-color:transparent; }
+  button { cursor:pointer; border:1px solid var(--line); background:#fff; color:var(--ink); padding:9px 14px; border-radius:7px; font-size:14px; font-weight:600; }
+  button:hover { border-color:var(--violet); }
+  button:disabled { opacity:.55; cursor:default; }
+  :focus-visible { outline:3px solid var(--violet); outline-offset:3px; }
+  a { color:var(--violet); text-underline-offset:4px; }
+  .top { background:var(--paper); border-bottom:1px solid var(--line); padding:16px max(24px,calc((100vw - 1200px)/2)); display:flex; justify-content:space-between; align-items:center; gap:20px; }
+  .brand { display:flex; align-items:center; gap:9px; font-weight:750; letter-spacing:-.7px; font-size:22px; }
+  .brand svg { width:27px; height:27px; color:var(--violet); }
+  .top nav { display:flex; gap:23px; font-size:14px; }
+  .top nav a { text-decoration:none; }
+  main { max-width:1200px; margin:auto; padding:44px 24px 70px; }
+  .intro { display:grid; grid-template-columns:1.8fr 1fr; gap:38px; align-items:end; margin-bottom:30px; }
+  h1 { font-size:clamp(32px,4vw,48px); letter-spacing:-1.8px; line-height:1.12; margin:10px 0 18px; max-width:720px; }
+  h2 { font-size:25px; letter-spacing:-.6px; margin:0 0 12px; line-height:1.25; }
+  h3 { font-size:18px; margin:0 0 8px; }
+  p { margin:0 0 14px; max-width:76ch; }
+  .muted { color:var(--muted); }
+  .proposal { display:inline-block; background:var(--yellow); padding:3px 9px; border-radius:4px; font-size:13px; font-weight:650; }
+  .scope { border-left:3px solid var(--line); padding-left:20px; font-size:14px; }
+  .scope strong { display:block; margin-bottom:5px; }
+  .walkthrough { background:var(--paper); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  .workbar { padding:17px 22px; display:flex; align-items:center; justify-content:space-between; gap:16px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .workbar p { margin:0; font-size:14px; }
+  .roles { display:flex; gap:4px; background:var(--canvas); border-radius:8px; padding:4px; }
+  .roles button { border-color:transparent; background:transparent; padding:7px 14px; }
+  .roles button[aria-pressed="true"] { background:var(--violet); color:#fff; }
+  .workspace { display:grid; grid-template-columns:1fr 440px; min-height:580px; }
+  .sample { padding:42px 35px; background:#f7f8fc; position:relative; }
+  .sample .page-title { color:var(--muted); font-size:13px; margin-bottom:35px; }
+  .sample h2 { font-size:32px; max-width:320px; line-height:1.18; }
+  .sample .subcopy { max-width:340px; color:var(--muted); }
+  .price { font-size:58px; font-weight:750; letter-spacing:-2px; margin-top:30px; }
+  .price span { font-size:15px; color:var(--muted); font-weight:400; letter-spacing:0; }
+  .highlight { background:var(--yellow); padding:2px 4px; border-radius:3px; }
+  .pin { display:inline-grid; place-items:center; background:var(--violet); color:#fff; font-size:13px; border-radius:50%; width:25px; height:25px; vertical-align:middle; margin-left:4px; }
+  .sample-foot { margin-top:44px; padding-top:18px; border-top:1px solid var(--line); font-size:13px; color:var(--muted); }
+  .panel { border-left:1px solid var(--line); padding:22px; min-width:0; }
+  .panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:15px; }
+  .panel-head h3 { margin:0; }
+  .sync { font-size:12px; color:var(--green); background:#edf7f1; border-radius:4px; padding:3px 6px; }
+  .filter { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:19px; }
+  .filter button { font-size:12px; padding:5px 9px; font-weight:500; }
+  .filter button[aria-pressed="true"] { background:var(--wash); color:var(--violet); border-color:#c4b2e6; }
+  .comment { border:1px solid var(--line); border-radius:9px; padding:18px; box-shadow:0 3px 12px #20273606; overflow-wrap:anywhere; }
+  .person { display:flex; align-items:center; gap:9px; font-size:14px; }
+  .avatar { width:29px; height:29px; border-radius:50%; background:var(--wash); color:var(--violet); display:grid; place-items:center; font-size:12px; font-weight:700; flex:none; }
+  .person small { color:var(--muted); margin-left:auto; }
+  blockquote { border-left:3px solid var(--yellow); padding-left:10px; color:var(--muted); margin:15px 0 10px; font-size:13px; }
+  .comment-text { font-size:14px; }
+  .status { display:inline-block; font-size:12px; font-weight:650; color:var(--violet); background:var(--wash); padding:2px 7px; border-radius:4px; margin:8px 0; }
+  .decision { background:#f6f3fc; padding:13px; border-left:3px solid var(--violet); margin:12px 0; font-size:14px; }
+  .decision .at { display:block; font-size:12px; color:var(--muted); margin-top:5px; }
+  .decision p { margin:7px 0 0; }
+  .response { font-size:13px; font-weight:600; margin:12px 0; }
+  .response.accepted { color:var(--green); }
+  .actions { display:flex; flex-wrap:wrap; gap:7px; margin-top:13px; }
+  .primary { background:var(--violet); color:#fff; border-color:var(--violet); }
+  .quiet { background:transparent; font-size:13px; }
+  .form { background:var(--canvas); border-radius:7px; padding:13px; margin-top:14px; }
+  label { display:block; font-size:13px; font-weight:600; margin-bottom:6px; }
+  textarea { resize:vertical; min-height:86px; width:100%; padding:9px; border:1px solid #b6c1d2; border-radius:5px; background:#fff; color:var(--ink); font-size:14px; }
+  .error { color:var(--red); font-size:13px; margin:5px 0; }
+  .history { font-size:12px; padding-left:20px; color:var(--muted); margin:14px 0 0; }
+  .history li { margin-bottom:7px; }
+  .reply { font-size:13px; border-left:2px solid var(--line); padding-left:10px; margin:12px 0; }
+  .conflict { border:1px solid #d6a664; background:#fff8e9; border-radius:7px; padding:13px; margin:14px 0; font-size:13px; }
+  .conflict p { margin:6px 0; }
+  .conflict .versions { background:#fff; padding:9px; margin:10px 0; border:1px solid #eadcc6; border-radius:4px; }
+  .scenario-bar { border-top:1px solid var(--line); padding:16px 22px; display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
+  .scenario-bar label { margin:0; }
+  select { max-width:100%; border:1px solid var(--line); border-radius:6px; padding:7px; font-size:13px; background:white; color:var(--ink); }
+  #notice { padding:12px 22px; color:var(--muted); font-size:13px; border-top:1px solid var(--line); margin:0; min-height:46px; }
+  .rules { display:grid; grid-template-columns:1fr 1fr 1fr; gap:28px; padding:38px 0; }
+  .rules article { border-top:3px solid var(--line); padding-top:14px; }
+  .rules p { font-size:14px; color:var(--muted); }
+  .details { background:#fff; border:1px solid var(--line); padding:24px; border-radius:10px; margin-top:12px; }
+  .details > summary { font-size:22px; font-weight:650; cursor:pointer; letter-spacing:-.5px; }
+  .details > p { margin-top:12px; color:var(--muted); font-size:14px; }
+  #spec { max-width:860px; padding-top:20px; overflow-wrap:anywhere; }
+  #spec h1 { font-size:30px; letter-spacing:-.7px; }
+  #spec h2 { font-size:22px; margin-top:35px; padding-top:20px; border-top:1px solid var(--line); }
+  #spec li { margin-bottom:9px; }
+  #spec code { font-size:.88em; background:var(--canvas); padding:2px 4px; border-radius:3px; }
+  .table-scroll { overflow-x:auto; margin:20px 0; }
+  table { border-collapse:collapse; width:100%; min-width:530px; font-size:14px; }
+  td,th { border-bottom:1px solid var(--line); padding:10px; text-align:left; vertical-align:top; }
+  th { background:var(--canvas); }
+  footer { font-size:13px; color:var(--muted); padding-top:30px; }
+  [hidden] { display:none !important; }
+  @media(max-width:900px) { .workspace { grid-template-columns:1fr 390px; } .sample { padding:32px 22px; } .intro { grid-template-columns:1fr; gap:15px; } }
+  @media(max-width:700px) { main { padding:28px 16px 45px; } .top { padding:12px 16px; } .top nav { gap:13px; font-size:12px; } .brand { font-size:19px; } .workspace { grid-template-columns:1fr; } .sample { padding:25px; } .sample h2 { font-size:25px; max-width:none; } .price { font-size:38px; margin-top:16px; } .sample .page-title { margin-bottom:15px; } .sample-foot { margin-top:20px; } .panel { border-left:0; border-top:1px solid var(--line); padding:18px; } .rules { grid-template-columns:1fr; gap:15px; padding:25px 0; } .rules p { margin-bottom:0; } .workbar { padding:15px; } .details { padding:18px; } .scenario-bar { padding:15px; align-items:flex-start; } }
+  @media print { .top,.scenario-bar,.roles,.actions { display:none; } main { max-width:none; } body { background:#fff; } .workspace { min-height:0; } .details { border:0; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14v13h-7l-5 5v-5H5z" fill="none" stroke="currentColor" stroke-width="2"/><path d="m9 9 2 2 4-4" fill="none" stroke="currentColor" stroke-width="2"/></svg>annotate</div>
+  <nav aria-label="Page"><a href="#walkthrough">Try the flow</a><a href="#design">Full design</a></nav>
+</header>
+<main>
+  <section class="intro">
+    <div><span class="proposal">Design proposal · October 30, 2026</span><h1>A decision deserves<br>a next step.</h1><p class="muted">An author explains how feedback was addressed. The reviewer accepts the decision or reopens the conversation with a reason.</p></div>
+    <div class="scope"><strong>Review the proposed behavior</strong>This is an interactive design simulation. Changes stay on this page; the remote feedback feature has not been implemented.</div>
+  </section>
+  <section class="walkthrough" id="walkthrough" aria-label="Interactive feedback walkthrough">
+    <div class="workbar"><div><strong>One comment, both sides</strong><p class="muted">Switch roles to follow the conversation.</p></div><div class="roles" role="group" aria-label="Preview role"><button type="button" id="role-author" aria-pressed="true">Author · Morgan</button><button type="button" id="role-reviewer" aria-pressed="false">Reviewer · Alex</button></div></div>
+    <div class="workspace">
+      <div class="sample"><div class="page-title">Sample reviewed page / pricing</div><h2>A simpler place<br>to work together.</h2><p class="subcopy">One plan for your team's projects, files, and conversations.</p><div class="price">CHF 29 <span>/ month</span></div><p><span class="highlight" id="page-copy">Billed annually.</span><span class="pin" aria-label="Comment 1">1</span></p><div class="sample-foot">The annotation stays attached to the part of the page that prompted the feedback.</div></div>
+      <aside class="panel" aria-label="Comment preview"><div class="panel-head"><h3>Feedback</h3><span class="sync" id="sync">Preview only</span></div><div class="filter" role="group" aria-label="Comment filters"><button data-filter="all" aria-pressed="true">All <span id="all-count">1</span></button><button data-filter="needs" aria-pressed="false">Needs my response <span id="needs-count">0</span></button><button data-filter="conflict" aria-pressed="false">Conflicts <span id="conflict-count">0</span></button></div><div id="card"></div></aside>
+    </div>
+    <div class="scenario-bar"><label for="scenario">Jump to a scenario</label><select id="scenario"><option value="open">New feedback</option><option value="disposed">Author's decision</option><option value="accepted">Accepted decision</option><option value="conflict">Decision changed elsewhere</option><option value="deleted">Deleted while offline</option></select><button type="button" id="reset">Reset walkthrough</button></div>
+    <p id="notice" role="status" aria-live="polite">Start as the author: resolve the comment, or choose “Won't fix” and explain why.</p>
+  </section>
+  <section class="rules" aria-label="Design principles">
+    <article><h3>Seen isn't accepted</h3><p>A decision stays in “Needs my response” until the reviewer explicitly accepts it or reopens it. Reading a comment doesn't settle it.</p></article>
+    <article><h3>Disagreement is a conversation</h3><p>Reopening requires a reason. The author sees it in the thread and history, linked to the decision being challenged.</p></article>
+    <article><h3>Conflicts keep your work</h3><p>A changed decision asks you to review the latest version. Your draft survives, and other comments can keep syncing.</p></article>
+  </section>
+  <details class="details" id="design" open><summary>Full design and delivery criteria</summary><p>The complete proposal is included below. It covers permissions, compatibility, conflict recovery, remote deployment, and verification.</p><div id="spec"><h1>Remote feedback disposition and conflict handling</h1>
+<p>Date: 2026-10-30 Status: Proposed; product behavior confirmed, written design pending review Scope: annotate.js, its reference server, public types, protocol, deployment documentation, and tests</p>
+<h2>Outcome and agreed behavior</h2>
+<p>A review author can address and dispose a reviewer&#x27;s comment. The reviewer sees the decision, explanation, actor, and time, and can explicitly <strong>Accept</strong> it or <strong>Reopen with a reason</strong>. The user selected this interaction on 2026-10-30. An author&#x27;s <strong>Won&#x27;t fix</strong> decision requires an explanation. Acceptance is shared server state; marking an update as seen remains a browser-local read action.</p>
+<p>The implementation must preserve local-only annotation, existing saved records, exports, invite authentication, reviewer privacy, and the dependency-free client. Success means a real author/reviewer round trip through the remote server, including offline retries and conflicting decisions, with no silently lost work.</p>
+<h2>Current implementation and gaps</h2>
+<ul>
+<li><code>annotate.js</code> already supports open/in-progress/resolved/won&#x27;t-fix, assignment, remote replies, unread indicators, history, and reopening.</li>
+<li>Closing currently records actor/time but has no structured explanation, durable reviewer acceptance, or reasoned reopen operation.</li>
+<li><code>handleResponse()</code> automatically reapplies fields after a 409 and eventually drops the operation after repeated conflicts. Overlapping decisions are not presented for human resolution.</li>
+<li>Queue operations rebuild PUT bodies from mutable cached records. Polling can advance the remembered server timestamp while local changes remain pending; a timestamp alone does not retain the original edit base.</li>
+<li><code>putComment()</code> rejects older supplied timestamps, but missing or future base timestamps can bypass this check. DELETE has no version precondition.</li>
+<li>The reference server serializes writes only inside one process; its JSON storage and in-memory idempotency cache are not a multi-replica database.</li>
+</ul>
+<p>These findings are from the current working tree, not a production inspection.</p>
+<h2>Approach and alternatives</h2>
+<p>Extend the existing four statuses with an additive structured disposition and reviewer response, plus an atomic lifecycle-action endpoint. This keeps status filters and exports useful while making acceptance distinct from resolution.</p>
+<p>Adding more status strings such as &quot;accepted&quot; would conflate an author&#x27;s decision with a reviewer&#x27;s response and complicate older clients. Using ordinary replies alone would leave decision explanations and acceptance ambiguous, and posting a reply followed by a status update could partially succeed. Neither is selected.</p>
+<h2>Lifecycle and permissions</h2>
+<div class="table-scroll"><table><thead><tr><th>Situation</th><th>Available action</th><th>Result</th></tr></thead><tbody>
+<tr><td>Open or in progress</td><td>Author resolves, optionally explains</td><td>Resolved, awaiting reviewer response</td></tr>
+<tr><td>Open or in progress</td><td>Author declines with required explanation</td><td>Won&#x27;t fix, awaiting reviewer response</td></tr>
+<tr><td>Disposed, awaiting response</td><td>Original reviewer accepts</td><td>Same closed status, accepted decision</td></tr>
+<tr><td>Disposed, awaiting response or accepted</td><td>Original reviewer reopens with required reason</td><td>Open; decision response records reopen</td></tr>
+<tr><td>Any visible comment</td><td>Reply</td><td>Discussion appended without changing disposition</td></tr>
+<tr><td>Open</td><td>Author starts/stops work or assigns</td><td>Existing status/assignment behavior</td></tr>
+<tr><td>Own open comment</td><td>Reviewer withdraws</td><td>Explicit withdrawal; no fabricated author disposition</td></tr>
+</tbody></table></div>
+<p>Only review authors dispose or assign. Only the original reviewer accepts or requests reopening; an author may administratively reopen, identified as such in history. Another reviewer cannot see the comment or its actions. Server-side identity and role checks are authoritative; display-name matching is never an authorization fallback in remote mode. A review author cannot accept on behalf of a different reviewer. Reopening clears active acceptance and closing metadata.</p>
+<p>An author can issue a replacement disposition, including after acceptance. Every new decision gets a new ID and awaits a new reviewer response. Accepting an old decision must never accept its replacement. History retains prior cycles.</p>
+<h2>Record and API contract</h2>
+<p>Keep schema v2 and existing statuses; add optional fields, normalized to null on old records:</p>
+<ul>
+<li><code>disposition</code>: <code>{ id, status, reason, by: { id, name }, at }</code> or null. Status is <code>resolved</code> or <code>wont_fix</code>. Reasons are trimmed plain text, maximum 5,000 chars.</li>
+<li><code>reviewerResponse</code>: <code>{ dispositionId, action: &#x27;accepted&#x27;, by: { id, name }, at }</code> or null. Reopen reasons and prior decisions remain in activity history.</li>
+</ul>
+<p>Add <code>POST /reviews/{reviewId}/comments/{id}/actions</code>, using the existing bearer session, CORS policy, and <code>Idempotency-Key</code>. Body includes <code>action</code>, the exact <code>baseUpdatedAt</code>, <code>dispositionId</code> when responding, and <code>reason</code> where required. Actions are <code>resolve</code>, <code>decline</code>, <code>accept</code>, <code>reopen</code>, and <code>withdraw</code>.</p>
+<p>The server validates visibility, permissions, current version, target decision, and reason before one serialized transaction updates the record and appends the activity event. A reasoned reopen also adds a system-associated thread entry in the same transaction, so authors see the request without opening history. Thread capacity is checked before mutation; a full thread returns an actionable error without changing status. Responses return the full canonical comment. Actor, timestamps, decision IDs, and acceptance are server-owned.</p>
+<p>Use 409 with the visible canonical record for stale state or a changed decision; 410 for tombstones; 403 for denied actions; 422 for invalid/empty reasons or invalid transitions. Hidden records return 404 without a record. Repeated keys with the same request return the original result; key reuse with a different request returns a conflict. Persist successful action deduplication with the record/history so a lost response followed by a server restart cannot duplicate a decision or a reasoned reopen.</p>
+<p>Advertise support in session metadata as <code>capabilities: [&#x27;disposition-v1&#x27;]</code>. With an older backend, retain the existing workflow and clearly identify that structured decisions and acceptance are unavailable. Do not simulate successful shared acceptance in localStorage. Legacy PUT clients keep their existing status semantics; a legacy close is displayed as a legacy closure, and a legacy status change invalidates active acceptance. Legacy clients cannot write the new server-owned fields. Public <code>setStatus()</code> uses lifecycle actions when the backend supports them; decline/reopen that require a reason return an explicit error unless the new action API supplies one. Add typed programmatic action methods and action-result/error events for integrators.</p>
+<h2>Conflict and recovery rules</h2>
+<ol>
+<li>Persist each queued operation&#x27;s immutable intent and original base values, independently of the optimistic cache. Retries with the same idempotency key use the same request body. Subsequent edits are separate queued intentions.</li>
+<li>Existing-record PUT requires a valid, exact base timestamp. Missing, older, or future bases do not bypass compare-and-swap. Creates remain supported.</li>
+<li>On stale content writes, compare original base, latest server, and local intent by field. Rebase disjoint changes automatically. If both sides changed the same field to different values, persist a conflict and pause that comment&#x27;s writes. Show <strong>Use latest</strong> and <strong>Keep my change</strong>, with both values reviewable. A deliberate retry gets a new key and current base.</li>
+<li>Never automatically reapply a stale lifecycle action or DELETE. Present the current decision and preserve the user&#x27;s explanation for review/retry. Add an exact base precondition for new-client DELETE requests while keeping legacy delete compatibility documented.</li>
+<li>Blocking one comment must not block independent comments. Writes for one comment stay ordered. <code>submit()</code> rejects with actionable pending-conflict information; the footer cannot say &quot;Sent&quot; while a conflict remains.</li>
+<li>Concurrent replies append and deduplicate by reply ID. Replies do not silently accept, reopen, or replace a decision. Simultaneous acceptance and reopen of one decision produce one accepted action and one visible conflict.</li>
+<li>A remote tombstone wins. Preserve rejected local text and explanations in a recoverable draft with copy/download and an explicit &quot;Create new comment&quot; action; never resurrect the deleted ID automatically.</li>
+<li>Polls and acknowledgements preserve active composers, reply/edit/action drafts, and unresolved conflicts. A background fetch cannot change the base of an already queued action. Older in-flight responses cannot regress state.</li>
+<li>Queues, conflict drafts, and read marks are scoped to API origin, review, and authenticated identity. Switching identity never sends another user&#x27;s queue; old unscoped work is quarantined for recovery rather than silently replayed.</li>
+<li>Network errors, auth expiry, rate limits, permanent rejection, repeated conflicts, and storage failures show distinct states and retain recoverable input. Exhausting retries never silently drops a user&#x27;s change.</li>
+</ol>
+<h2>User interface</h2>
+<p>The card displays an explicit decision block with outcome, explanation, author, time, and response: <strong>Awaiting your response</strong>, <strong>Accepted by ...</strong>, or reopened activity. Closed comments needing a reviewer response remain discoverable until accepted or reopened, even after marking them seen. Add <strong>Needs my response</strong> and <strong>Conflicts</strong> filters with counts; preserve existing Open/Resolved/All filters.</p>
+<p>Author controls open a small disposition form; reviewer controls offer Accept, Reply, and Reopen with a reason. Required reasons have inline validation. Pending actions have a visible sync state and prevent duplicate clicks. History shows reasons and explicit decision/response events, including repeated cycles. Conflict controls show what changed and retain editable local text. All controls have labels, keyboard operation, mobile layouts, and text-only safe rendering.</p>
+<h2>Remote deployment and compatibility</h2>
+<p>Deliver an executable self-host example configuration with separate author and reviewer invites, persistent data mount, exact allowed origins, health check, and a reverse-proxy/TLS example. Add instructions for startup, backup/restore, restart verification, upgrade, and rollback. Keep the reference backend limited to one process/replica and enforce a data-directory writer lock; do not claim multi-process safety from atomic file rename. Load/write errors fail visibly without replacing existing data with an empty review or acknowledging a write that did not persist. Stage record/history changes and publish them to the cache only after durable save succeeds.</p>
+<p>This repository can deliver a working remote server and client integration. The separately deployed Reviewjs API/dashboard must implement the new action contract before enabling its capability. No production deployment or changes to the adjacent <code>reviewjs</code> repository are included in this initial scope.</p>
+<h2>Verification and completion criteria</h2>
+<ul>
+<li>Server tests: role isolation; required reasons; exact version checking; forged/missing/future bases; stale acceptance; simultaneous actions; atomic reason/status/history; duplicate keys, changed-body keys, restart retries; delete races; full threads; persistence failure; writer-lock enforcement.</li>
+<li>Browser tests using isolated author/reviewer contexts against the real server: raise → assign/start → dispose with explanation → see pending response → accept → reopen with reason → dispose again. Verify filters and history.</li>
+<li>Browser race tests: overlapping and disjoint edits; action versus polling; acceptance versus replacement decision; offline/reload recovery; deleted comment with an unsent explanation; identity switch; unrelated comments syncing past a conflict; active drafts surviving all background updates.</li>
+<li>Run server tests, affected browser tests across desktop engines and mobile, existing regression suite, build/generated artifact parity, type-consumer checks, and package dry run. Record actual passes/skips and limitations.</li>
+<li>Exercise documented remote configuration with persistent storage and a server restart. Verify both roles through the built client. This is deployment readiness evidence, not evidence that an existing production host was changed.</li>
+</ul>
+<p>The implementation is complete when the supported reference deployment passes these checks, public API/types/protocol/docs agree, and no pending conflict or failed write is represented as a successful disposition or acceptance.</p></div></details>
+  <footer>Proposed behavior for annotate.js and its reference backend. Production deployment is a separate step.</footer>
+</main>
+<script>
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  let role = 'author', filter = 'all', model, form = null, draft = '', showHistory = false, serial = 0;
+  const initial = () => ({ text:'Can you make the annual total clear? I thought CHF 29 was the full yearly price.', status:'open', decision:null, accepted:false, conflict:false, deleted:false, draft:'', replies:[], history:['Alex raised this comment.'] });
+  const decision = (status, reason) => ({ id:++serial, status, reason, at:'Just now' });
+  const closed = () => ['resolved','wont_fix'].includes(model.status);
+  const pending = () => closed() && !model.accepted && !model.deleted;
+  const label = () => ({open:'Open',in_progress:'In progress',resolved:'Resolved',wont_fix:"Won't fix"}[model.status]);
+  function notice(text) { $('notice').textContent = text; }
+  function setRole(next) { role = next; filter = 'all'; form = null; draft = ''; render(); notice(role === 'author' ? 'Author view: address the feedback and explain your decision.' : 'Reviewer view: accept the decision, reply, or reopen with a reason.'); }
+  function preserve() { const input = $('reason'); if (input) draft = input.value; }
+  function render() {
+    $('role-author').setAttribute('aria-pressed', role === 'author'); $('role-reviewer').setAttribute('aria-pressed', role === 'reviewer');
+    $('all-count').textContent = model.deleted ? '0' : '1';
+    $('needs-count').textContent = role === 'reviewer' && pending() ? '1' : '0';
+    $('conflict-count').textContent = model.conflict ? '1' : '0';
+    document.querySelectorAll('[data-filter]').forEach(b => b.setAttribute('aria-pressed', b.dataset.filter === filter));
+    $('sync').textContent = model.conflict ? 'Needs attention' : 'Preview only';
+    $('sync').style.color = model.conflict ? 'var(--red)' : 'var(--green)';
+    $('page-copy').textContent = model.status === 'resolved' ? 'CHF 348 per year, billed annually.' : 'Billed annually.';
+    if ((filter === 'needs' && !(role === 'reviewer' && pending())) || (filter === 'conflict' && !model.conflict)) { $('card').innerHTML = '<p class="muted">No comments in this view. Choose All to return to the walkthrough.</p>'; return; }
+    let html = '<article class="comment"><div class="person"><span class="avatar">AL</span><strong>Alex</strong><small>Comment #1</small></div><blockquote>“Billed annually.”</blockquote><p class="comment-text">' + esc(model.text) + '</p>';
+    if (model.deleted) {
+      html += '<div class="conflict"><strong>This comment was deleted.</strong><p>Your unsent explanation is still available. The deleted comment will not be restored automatically.</p><label for="recovered">Your saved draft</label><textarea id="recovered" readonly>' + esc(model.draft) + '</textarea><div class="actions"><button data-act="copy">Copy draft</button><button data-act="new" class="primary">Create new comment</button></div></div>';
+    } else {
+      html += '<span class="status">' + label() + '</span>';
+      if (model.decision) html += '<div class="decision"><strong>' + label() + ' by Morgan</strong><span class="at">' + model.decision.at + ' · Decision ' + model.decision.id + '</span><p>' + esc(model.decision.reason || 'The author marked this feedback as addressed.') + '</p></div>';
+      if (closed()) html += '<p class="response' + (model.accepted ? ' accepted' : '') + '">' + (model.accepted ? 'Accepted by Alex · Just now' : role === 'reviewer' ? 'Awaiting your response' : 'Awaiting Alex’s response') + '</p>';
+      model.replies.forEach(r => { html += '<div class="reply"><strong>' + esc(r.by) + '</strong><br>' + esc(r.text) + '</div>'; });
+      if (model.conflict) {
+        html += '<div class="conflict"><strong>The decision changed while you were away.</strong><p>Your action was paused. Review the latest decision before responding.</p><div class="versions"><strong>Latest from Morgan</strong><br>' + esc(model.decision.reason) + '</div><label for="saved-draft">Your saved draft</label><textarea id="saved-draft">' + esc(model.draft) + '</textarea><div class="actions"><button class="primary" data-act="latest">Use latest decision</button><button data-act="retry">Review my action</button></div></div>';
+      } else if (role === 'author') {
+        html += '<div class="actions">' + (!closed() ? '<button class="primary" data-act="resolve">Resolve</button><button data-act="decline">Won\'t fix</button><button data-act="start">' + (model.status === 'in_progress' ? 'Stop work' : 'Start work') + '</button>' : '<button data-act="resolve">Replace decision</button><button data-act="reopen">Reopen</button>') + '<button data-act="reply">Reply</button></div>';
+      } else {
+        html += '<div class="actions">' + (closed() ? (!model.accepted ? '<button class="primary" data-act="accept">Accept decision</button>' : '') + '<button data-act="reopen">Reopen with reason</button>' : '') + '<button data-act="reply">Reply</button></div>';
+      }
+      if (form) {
+        const required = ['decline','reopen'].includes(form);
+        const heading = ({resolve:'Resolution explanation (optional)',decline:"Why won't this be addressed? (required)",reopen:'Why should this be reopened? (required)',reply:'Your reply'})[form];
+        html += '<form id="action-form" class="form" novalidate><label for="reason">' + heading + '</label><textarea id="reason" maxlength="5000"' + (required || form === 'reply' ? ' required' : '') + ' aria-describedby="form-error">' + esc(draft) + '</textarea><p class="error" id="form-error" role="alert"></p><div class="actions"><button class="primary" type="submit">' + ({resolve:'Save resolution',decline:'Save decision',reopen:'Reopen comment',reply:'Post reply'})[form] + '</button><button type="button" data-act="cancel">Cancel</button></div></form>';
+      }
+    }
+    html += '<div class="actions"><button class="quiet" data-act="history" aria-expanded="' + showHistory + '">' + (showHistory ? 'Hide history' : 'Show history') + '</button></div>';
+    if (showHistory) html += '<ol class="history">' + model.history.map(h => '<li>' + esc(h) + '</li>').join('') + '</ol>';
+    $('card').innerHTML = html + '</article>';
+    if ($('action-form')) $('action-form').addEventListener('submit', submit);
+  }
+  function submit(e) {
+    e.preventDefault(); const text = $('reason').value.trim();
+    if (form !== 'resolve' && !text) { $('form-error').textContent = 'Add a reason or reply before continuing.'; $('reason').setAttribute('aria-invalid','true'); $('reason').focus(); return; }
+    if (form === 'resolve' || form === 'decline') {
+      model.status = form === 'resolve' ? 'resolved' : 'wont_fix'; model.decision = decision(model.status,text); model.accepted = false;
+      model.history.push('Morgan ' + (form === 'resolve' ? 'resolved the comment' : 'declined the request') + (text ? ': ' + text : '.'));
+      notice('Decision saved in this preview. Switch to Reviewer · Alex to accept it or reopen with a reason.');
+    } else if (form === 'reopen') {
+      const by = role === 'author' ? 'Morgan' : 'Alex';
+      model.history.push(by + ' reopened decision ' + (model.decision ? model.decision.id : '') + ': ' + text);
+      model.replies.push({by,text:'Reopened: ' + text}); model.status = 'open'; model.decision = null; model.accepted = false;
+      notice('Comment reopened. The reason is visible in the thread and history.');
+    } else { const by = role === 'author' ? 'Morgan' : 'Alex'; model.replies.push({by,text}); model.history.push(by + ' replied: ' + text); notice('Reply added. The decision and acceptance state are unchanged.'); }
+    form = null; draft = ''; filter = 'all'; render();
+  }
+  $('card').addEventListener('click', async e => {
+    const b = e.target.closest('[data-act]'); if (!b) return; const act = b.dataset.act;
+    if (['resolve','decline','reopen','reply'].includes(act)) { preserve(); form = act; render(); $('reason').focus(); }
+    else if (act === 'cancel') { form = null; draft = ''; render(); }
+    else if (act === 'accept') { model.accepted = true; model.history.push('Alex accepted decision ' + model.decision.id + '.'); render(); notice('Decision accepted. It no longer needs a reviewer response.'); }
+    else if (act === 'start') { model.status = model.status === 'open' ? 'in_progress' : 'open'; model.history.push('Morgan marked the comment ' + label().toLowerCase() + '.'); render(); }
+    else if (act === 'history') { preserve(); showHistory = !showHistory; render(); }
+    else if (act === 'latest' || act === 'retry') {
+      model.draft = $('saved-draft').value; model.conflict = false; filter = 'all';
+      form = act === 'retry' ? 'reopen' : null; draft = model.draft; render();
+      if (form) $('reason').focus(); notice(act === 'retry' ? 'Your explanation is restored. Review it before explicitly reopening the latest decision.' : 'Latest decision loaded. Your draft stays in this preview; choose Reopen with reason to recover it.');
+    }
+    else if (act === 'copy') { try { await navigator.clipboard.writeText(model.draft); notice('Saved draft copied.'); } catch { $('recovered').focus(); $('recovered').select(); notice('Select and copy the saved draft above.'); } }
+    else if (act === 'new') { const saved = model.draft; model = initial(); model.text = saved; model.history = ['Alex explicitly created a new comment using the recovered draft.']; filter = 'all'; render(); notice('A separate comment was created in this preview. The deleted ID stays deleted.'); }
+  });
+  $('role-author').addEventListener('click', () => setRole('author'));
+  $('role-reviewer').addEventListener('click', () => setRole('reviewer'));
+  document.querySelectorAll('[data-filter]').forEach(b => b.addEventListener('click', () => { preserve(); filter = b.dataset.filter; render(); }));
+  function scenario(value) {
+    model = initial(); form = null; draft = ''; filter = 'all'; showHistory = false; role = value === 'open' ? 'author' : 'reviewer';
+    if (value !== 'open' && value !== 'deleted') { model.status = 'resolved'; model.decision = decision('resolved','Added the annual total beside the monthly price so the billing period is clear.'); model.history.push('Morgan resolved the comment with an explanation.'); }
+    if (value === 'accepted') { model.accepted = true; model.history.push('Alex accepted decision ' + model.decision.id + '.'); }
+    if (value === 'conflict') { model.status = 'wont_fix'; model.decision = decision('wont_fix','The annual total appears at checkout. We are keeping the pricing page concise.'); model.conflict = true; model.draft = 'The total should be visible before checkout. Please reconsider.'; model.history.push('Morgan replaced the earlier decision while Alex was offline.'); }
+    if (value === 'deleted') { model.deleted = true; model.draft = 'The annual total is still missing on mobile.'; model.history.push('Morgan deleted the comment while Alex had an unsent explanation.'); }
+    render(); notice(value === 'open' ? 'Start as the author: resolve the comment, or choose “Won’t fix” and explain why.' : value === 'conflict' ? 'Your earlier action cannot overwrite a newer decision. Choose how to continue.' : value === 'deleted' ? 'Deletion wins; the unsent draft remains recoverable.' : 'Try accepting the decision or reopening it with a reason.');
+  }
+  $('scenario').addEventListener('change', e => scenario(e.target.value));
+  $('reset').addEventListener('click', () => { $('scenario').value = 'open'; scenario('open'); });
+  scenario('open');
+})();
+</script>
+</body>
+</html>
