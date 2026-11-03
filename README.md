@@ -151,6 +151,7 @@ browser. The author's dashboard hands out this tag and the invite links:
 |---|---|
 | `data-api` | The backend origin. Without it the page stays local-only, exactly as above. |
 | `data-review-id` | The review this page belongs to. |
+| `data-credentials` | `omit` (default), `same-origin` or `include`. Whether backend and `data-post-url` requests carry cookies. Use `same-origin` when the backend shares the page's origin behind a cookie sign-in (an identity-aware proxy, for example). A cross-origin backend needs CORS with `Access-Control-Allow-Credentials` for `include`. |
 
 Reviewers arrive through a personal link, `https://your-site/page?an_invite=…`.
 The token is stored for that review in the reviewer's browser and removed from
@@ -166,6 +167,27 @@ site addresses registered on the review may use it.
   comments stay in the browser; Download or Copy sends them by email.
 - In a synced review there is nothing to submit: the footer reads "Sent to the
   review" as soon as a comment is posted.
+
+#### Your own sign-in (`auth`)
+
+When the backend sits behind your site's own sign-in, skip invite links and
+hand Annotate the session yourself (programmatic config only):
+
+```js
+Annotate.init({
+  api: "/review-api",            // same origin, behind your proxy
+  reviewId: "rvw_…",
+  credentials: "same-origin",    // send the proxy's session cookie
+  auth: {
+    getToken: () => mySession.token,        // bearer token, or null when signed out
+    getReviewer: () => ({ id: me.id, name: me.name, role: me.isOwner ? "author" : "reviewer" }),
+    onUnauthorized: () => mySession.signIn(),
+  },
+});
+```
+
+`getReviewer` is optional. Without it the viewer is unnamed and never gets
+the review author's controls.
 
 ## Framework integration
 

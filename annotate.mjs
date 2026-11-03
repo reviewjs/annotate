@@ -71,6 +71,13 @@ const createController = function (host) {
   // CONFIG — resolved from (in priority order) the script tag's data-* attrs,
   // then a global window.AnnotateConfig object, then built-in defaults.
   // --------------------------------------------------------------------------
+  // Cookies stay out of backend and postUrl requests unless the integrator
+  // opts in (a same-origin backend behind a cookie sign-in, for example).
+  // Anything other than the three Fetch values falls back to "omit".
+  function fetchCredentials(v) {
+    v = String(v || "").trim().toLowerCase();
+    return v === "same-origin" || v === "include" ? v : "omit";
+  }
   var scriptData = (SCRIPT && SCRIPT.dataset) || {};   // data-* attributes
   var globalConfig = config || window.AnnotateConfig || {};       // window.AnnotateConfig
   var explicitPage = scriptData.page || globalConfig.page || "";
@@ -90,8 +97,9 @@ const createController = function (host) {
     reviewId: String(scriptData.reviewId || globalConfig.reviewId || "").trim(),
     inviteParam: String(scriptData.inviteParam || globalConfig.inviteParam || "an_invite").trim(),
     pollInterval: Math.max(500, Number(scriptData.pollInterval || globalConfig.pollInterval) || 20000),
+    credentials: fetchCredentials(scriptData.credentials || globalConfig.credentials),
   };
-  // Integrator-supplied auth ({ getToken, onUnauthorized }) is object-only,
+  // Integrator-supplied auth ({ getToken, onUnauthorized, getReviewer }) is object-only,
   // so it can come from AnnotateConfig / init() but never from data-*.
   var authHook = globalConfig.auth && typeof globalConfig.auth.getToken === "function" ? globalConfig.auth : null;
   // An explicit data-page / AnnotateConfig.page is fixed; otherwise the page key
@@ -611,7 +619,7 @@ const createController = function (host) {
     if (sync.token) h.Authorization = "Bearer " + sync.token;
     if (body !== undefined) h["Content-Type"] = "application/json";
     return window.fetch(API_BASE + path, {
-      method: method, headers: h, credentials: "omit", cache: "no-store",
+      method: method, headers: h, credentials: CFG.credentials, cache: "no-store",
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller ? controller.signal : undefined,
     }).then(function (res) {
@@ -669,8 +677,8 @@ const createController = function (host) {
       p = Promise.resolve().then(function () { return authHook.getToken(); }).then(function (token) {
         sync.token = typeof token === "string" && token ? token : null;
         sync.expiresAt = sync.token ? Infinity : 0;
-        return sync.token;
-      });
+        return sync.token ? hookReviewer() : null;
+      }).then(function () { return sync.token; });
     } else {
       var invite = store.get(INVITE_KEY);
       var body = invite ? { invite: invite } : state.author ? { name: state.author } : null;
@@ -685,16 +693,28 @@ const createController = function (host) {
     sync.sessionPromise = p.finally(function () { sync.sessionPromise = null; });
     return sync.sessionPromise;
   }
+  // With integrator auth there is no /session response to name the viewer,
+  // so an optional auth.getReviewer() supplies it ({ id, name, role }). A
+  // failing or malformed answer leaves the viewer unnamed, as before.
+  function hookReviewer() {
+    if (typeof authHook.getReviewer !== "function") return null;
+    return Promise.resolve().then(function () { return authHook.getReviewer(); }).then(function (r) {
+      if (destroyed || !r || typeof r !== "object" || typeof r.id !== "string" || !r.id) return;
+      setReviewer(r);
+      dispatch("annotate:auth", { reviewer: sync.reviewer });
+      if (booted) renderPanel();
+    }, function () {});
+  }
+  function setReviewer(r) {
+    sync.reviewer = { id: r.id, name: String(r.name || ""), role: r.role === "author" ? "author" : "reviewer" };
+    state.authorId = sync.reviewer.id;
+    if (sync.reviewer.name) state.author = sync.reviewer.name;
+  }
   function acceptSession(data) {
     sync.token = data.token;
     sync.expiresAt = Date.parse(data.expiresAt) || Date.now() + 3600000;
     sync.held = false;
-    if (data.reviewer && typeof data.reviewer.id === "string") {
-      sync.reviewer = { id: data.reviewer.id, name: String(data.reviewer.name || ""),
-        role: data.reviewer.role === "author" ? "author" : "reviewer" };
-      state.authorId = sync.reviewer.id;
-      if (sync.reviewer.name) state.author = sync.reviewer.name;
-    }
+    if (data.reviewer && typeof data.reviewer.id === "string") setReviewer(data.reviewer);
     if (data.review && typeof data.review.note === "string" && data.review.note) { state.note = data.review.note; renderNote(); }
     dispatch("annotate:auth", { reviewer: sync.reviewer });
     syncChanged();
@@ -3278,7 +3298,7 @@ const createController = function (host) {
     var timeout = setTimeout(function () { if (postController) postController.abort(); }, 30000);
     toast("Sending feedback…", { kind: "info" });
     submitting = window.fetch(endpoint.href, { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload), credentials: "omit", signal: postController ? postController.signal : undefined })
+      body: JSON.stringify(payload), credentials: CFG.credentials, signal: postController ? postController.signal : undefined })
       .then(function (response) {
         if (!response.ok) throw new Error("HTTP " + response.status);
         if (!destroyed) toast("Feedback sent", { kind: "success" });

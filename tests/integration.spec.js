@@ -250,6 +250,99 @@ test.describe('public integration contract', () => {
       .toEqual(['Please review this']);
   });
 
+  test('credentials option controls whether backend and postUrl requests carry cookies', async ({ page, context }) => {
+    await context.addCookies([{ name: 'proxy_session', value: 'signed-in', url: 'http://localhost:4200' }]);
+    const seen = [];
+    await page.route('**/__creds/**', async route => {
+      const request = route.request();
+      seen.push({ path: new URL(request.url()).pathname, cookie: (await request.allHeaders()).cookie || '' });
+      const body = request.method() === 'GET' ? '{"comments":[]}' : '{"ok":true}';
+      await route.fulfill({ status: 200, contentType: 'application/json', body });
+    });
+    await page.goto('/');
+    await page.waitForFunction(() => !!window.Annotate);
+
+    async function run(credentials) {
+      seen.length = 0;
+      await page.evaluate(credentials => {
+        window.Annotate.destroy();
+        const config = {
+          project: 'creds-' + (credentials || 'default'), postUrl: '/__creds/feedback',
+          api: '/__creds/api', reviewId: 'rvw_creds', pollInterval: 500,
+          auth: { getToken: () => 'token' },
+        };
+        if (credentials) config.credentials = credentials;
+        window.Annotate.init(config);
+      }, credentials);
+      await expect.poll(() => seen.some(r => r.path.includes('/comments'))).toBe(true);
+      await page.evaluate(() => {
+        window.Annotate.destroy();
+        const project = 'creds-post';
+        localStorage.setItem('annotate:' + project, JSON.stringify({ comments: [{
+          id: 'creds-1', page: project + ':/', type: 'note', author: 'Test', text: 'Hi',
+          color: '#f59e0b', resolved: false, replies: [],
+          createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        }] }));
+      });
+      await page.evaluate(credentials => {
+        const config = { project: 'creds-post', postUrl: '/__creds/feedback' };
+        if (credentials) config.credentials = credentials;
+        return window.Annotate.init(config).submit();
+      }, credentials);
+      return {
+        api: seen.filter(r => r.path.includes('/comments')).map(r => r.cookie),
+        post: seen.filter(r => r.path.endsWith('/feedback')).map(r => r.cookie),
+        resolved: await page.evaluate(() => window.Annotate.config.credentials),
+      };
+    }
+
+    const omitted = await run(undefined);
+    expect(omitted.resolved).toBe('omit');
+    expect(omitted.api[0]).toBe('');
+    expect(omitted.post).toEqual(['']);
+
+    const sameOrigin = await run('same-origin');
+    expect(sameOrigin.resolved).toBe('same-origin');
+    expect(sameOrigin.api[0]).toContain('proxy_session=signed-in');
+    expect(sameOrigin.post).toEqual(['proxy_session=signed-in']);
+
+    const bogus = await run('everything');
+    expect(bogus.resolved).toBe('omit');
+    expect(bogus.post).toEqual(['']);
+  });
+
+  test('auth.getReviewer names the signed-in viewer and a failing one is ignored', async ({ page }) => {
+    let polls = 0;
+    await page.route('**/__who/**', route => {
+      if (route.request().url().includes('/comments')) polls++;
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{"comments":[]}' });
+    });
+    await page.goto('/');
+    await page.waitForFunction(() => !!window.Annotate);
+    const auth = await page.evaluate(() => new Promise(resolve => {
+      window.Annotate.destroy();
+      window.addEventListener('annotate:auth', e => resolve(e.detail), { once: true });
+      window.Annotate.init({
+        project: 'who', api: '/__who', reviewId: 'rvw_who',
+        auth: { getToken: () => 'token', getReviewer: () => Promise.resolve({ id: 'rvr_me', name: 'Me', role: 'author' }) },
+      });
+    }));
+    expect(auth.reviewer).toEqual({ id: 'rvr_me', name: 'Me', role: 'author' });
+
+    polls = 0;
+    await page.evaluate(() => {
+      window.Annotate.destroy();
+      window.__authEvents = 0;
+      window.addEventListener('annotate:auth', () => window.__authEvents++);
+      window.Annotate.init({
+        project: 'who-broken', api: '/__who', reviewId: 'rvw_who',
+        auth: { getToken: () => 'token', getReviewer: () => { throw new Error('nope'); } },
+      });
+    });
+    await expect.poll(() => polls).toBeGreaterThan(0);
+    expect(await page.evaluate(() => window.__authEvents)).toBe(0);
+  });
+
   test('share destination expands page, count, and summary placeholders', async ({ page }) => {
     await page.context().route('https://example.test/**', route => route.fulfill({ contentType: 'text/html', body: '<p>Issue form</p>' }));
     await page.goto('/');

@@ -24,6 +24,12 @@ export interface AnnotateConfig {
   inviteParam?: string;
   /** Poll interval in milliseconds for remote reads. Default 20000, minimum 500. */
   pollInterval?: number;
+  /**
+   * Fetch credentials mode for backend (api) and postUrl requests. Default
+   * "omit". Use "same-origin" for a same-origin backend behind a cookie
+   * sign-in, or "include" for a cross-origin one that allows credentials.
+   */
+  credentials?: 'omit' | 'same-origin' | 'include';
   /** Integrator-managed auth. Replaces the built-in invite-link exchange. */
   auth?: AnnotateAuth;
 }
@@ -33,6 +39,17 @@ export interface AnnotateAuth {
   getToken(): Promise<string | null> | string | null;
   /** Called when the backend refuses the token after one refresh. */
   onUnauthorized?(): void;
+  /**
+   * Optional: who the signed-in viewer is. Without it the viewer is unnamed
+   * and never a review author (no owner controls).
+   */
+  getReviewer?(): Promise<AnnotateReviewer | null> | AnnotateReviewer | null;
+}
+
+export interface AnnotateReviewer {
+  id: string;
+  name: string;
+  role: 'author' | 'reviewer';
 }
 
 export interface ResolvedAnnotateConfig {
@@ -51,6 +68,7 @@ export interface ResolvedAnnotateConfig {
   reviewId: string;
   inviteParam: string;
   pollInterval: number;
+  credentials: 'omit' | 'same-origin' | 'include';
 }
 
 export type AnnotateStatus = 'open' | 'in_progress' | 'resolved' | 'wont_fix';
