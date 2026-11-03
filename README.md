@@ -321,6 +321,11 @@ Sharing is an explicit action:
 4. You open the same page, click **Import** (⬆), pick the file — every comment
    reappears anchored in place.
 
+Reviewing a whole site? When other pages have comments too, the footer offers
+**All pages** under the buttons: one file with every page's comments. Import it
+on any page of the site and each comment goes back to the page it was made on
+(the project name may differ between the two browsers).
+
 To paste feedback directly into another tool, click **Copy** to copy the same
 complete, import-compatible JSON payload to the clipboard.
 
@@ -384,7 +389,8 @@ Annotate.disable();           // collapse to the launcher
 Annotate.setTool("highlight");// show the layer, then choose cursor | highlight | rect | circle | pen | pin
 Annotate.comments();          // → array of comment objects for this page
 Annotate.focus(id);           // scroll to & highlight a comment
-Annotate.export();            // trigger the JSON download
+Annotate.export();            // trigger the JSON download for this page
+Annotate.export({ scope: "site" }); // one file with every page's comments
 Annotate.import();            // open the file picker
 await Annotate.submit();      // POST the JSON export to postUrl
 Annotate.refresh();           // manually re-read the current page when spa is off

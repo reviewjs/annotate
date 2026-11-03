@@ -134,6 +134,8 @@ export interface FeedbackExport {
   url: string;
   project: string;
   exportedViewport: { vw: number; vh: number; dpr: number };
+  /** "site" when the file holds every page of the project; absent for a page export. */
+  scope?: 'site';
   comments: AnnotateComment[];
 }
 
@@ -152,7 +154,8 @@ export interface AnnotateAPI {
   comments(): AnnotateComment[];
   focus(id: string): void;
   toast(message: string, options?: { kind?: 'info' | 'error' | 'success'; duration?: number }): void;
-  export(): void;
+  /** Download this page's comments, or every page's with { scope: 'site' } (local mode). */
+  export(options?: { scope?: 'page' | 'site' }): void;
   import(): void;
   /**
    * Local mode: sends the current page's export JSON to postUrl; rejects on failure.

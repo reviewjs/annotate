@@ -392,6 +392,27 @@
   // and address them; reviewers only ever receive their own.
   function isReviewAuthor() { return REMOTE && !!sync.reviewer && sync.reviewer.role === "author"; }
 
+  // Every comment this browser holds for the project, across all pages —
+  // the source of a site export. Same validation and unsaved overlay as
+  // pageComments(); comments inside a delete's undo window are left out.
+  function projectComments() {
+    var listed = dbRead().comments.filter(function (c) {
+      return isValidComment(c) && !pendingDeletes[c.id];
+    }).map(normalizeComment);
+    var at = {};
+    listed.forEach(function (c, i) { at[c.id] = i; });
+    Object.keys(unsaved).forEach(function (id) {
+      var u = unsaved[id];
+      if (!u || pendingDeletes[id]) return;
+      if (at[id] !== undefined) listed[at[id]] = u; else listed.push(u);
+    });
+    return listed;
+  }
+  function pageCount(comments) {
+    var pages = {};
+    comments.forEach(function (c) { pages[c.page] = true; });
+    return Object.keys(pages).length;
+  }
   function pageComments() {
     // Validate stored records before touching properties: a corrupt/legacy
     // entry (e.g. [null]) must be skipped rather than crash rendering.
@@ -1448,6 +1469,11 @@
   #__an_foot .an-footrow.an-four .an-fbtn { flex-basis:calc(50% - 4px); }
   #__an_foot .an-fbtn:hover { background: var(--an-surface-2); border-color: var(--an-btn-bg); }
   #__an_foot .an-fbtn svg { width:15px; height:15px; }
+  #__an_foot .an-sitebtn { width:100%; border:0; background:none; color: var(--an-muted);
+    font:600 11.5px var(--an-font); cursor:pointer; display:flex; align-items:center;
+    justify-content:center; gap:6px; padding:2px; border-radius:6px; }
+  #__an_foot .an-sitebtn:hover { color: var(--an-fg); text-decoration:underline; }
+  #__an_foot .an-sitebtn svg { width:13px; height:13px; }
 
   /* ---- composer popover -------------------------------------------------- */
   #__an_compose { position:absolute; z-index:2147483300; width:304px;
@@ -3286,10 +3312,14 @@
     setTimeout(function () { URL.revokeObjectURL(url); objectUrls.delete(url); }, 1000);
   }
 
-  function buildExportPayload(allowEmpty) {
-    var comments = state.comments.map(serialize);
+  // scope "site" exports every page of the project in one file and marks it
+  // so import can put each comment back on its own page. Files without a
+  // scope are page exports, imported onto the page that opens them.
+  function buildExportPayload(allowEmpty, scope) {
+    var site = scope === "site";
+    var comments = (site ? projectComments() : state.comments).map(serialize);
     if (!comments.length && !allowEmpty) return null;
-    return {
+    var payload = {
       annotate: VERSION,
       schema: SCHEMA,
       kind: "annotate-export",
@@ -3300,19 +3330,28 @@
       exportedViewport: { vw: window.innerWidth, vh: window.innerHeight, dpr: window.devicePixelRatio || 1 },
       comments: comments,
     };
+    if (site) payload.scope = "site";
+    return payload;
   }
 
-  function exportComments() {
-    var payload = buildExportPayload();
+  function exportComments(options) {
+    var site = !!(options && options.scope === "site");
+    // A synced review's pages live on the backend; this browser only caches
+    // the pages it has visited, so a site file from it would be incomplete.
+    if (site && REMOTE) { toast("This review keeps every page on the server — download one page at a time", { kind: "info" }); return; }
+    var payload = buildExportPayload(false, site ? "site" : "page");
     if (!payload) {
-      toast("No comments on this page to export", { kind: "info" });
+      toast(site ? "No comments in this project to export" : "No comments on this page to export", { kind: "info" });
       return;
     }
     var comments = payload.comments;
-    var slug = (PAGE || "page").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "page";
+    var name = site ? (CFG.project || location.host || "site") + "-all-pages" : PAGE || "page";
+    var slug = name.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "page";
     var stamp = new Date().toISOString().slice(0, 10);
     downloadJSON(payload, "annotate-" + slug + "-" + stamp + ".json");
-    toast("Exported " + comments.length + " comment" + (comments.length === 1 ? "" : "s"), { kind: "success" });
+    var pages = site ? pageCount(comments) : 1;
+    toast("Exported " + comments.length + " comment" + (comments.length === 1 ? "" : "s") +
+      (pages > 1 ? " across " + pages + " pages" : ""), { kind: "success" });
   }
 
   // With a backend, submit means "every queued change is acknowledged";
@@ -3448,8 +3487,9 @@
     if (incoming.length > MAX_EXPORT_COMMENTS) {
       toast("That file has too many comments to import", { kind: "error" }); return;
     }
-    // Warn if the export came from a different page
-    if (data.page && data.page !== PAGE)
+    var site = data.scope === "site";
+    // Warn if a page export came from a different page
+    if (!site && data.page && data.page !== PAGE)
       toast("These comments were from a different page — positions may not match.", { kind: "info", duration: 6000 });
     // Existing IDs span the WHOLE project (all pages), not just the current
     // route — so importing one page's export onto another page cannot create
@@ -3464,7 +3504,7 @@
       if (exists[c.id]) { skipped++; return; }             // already imported to this project (any page)
       seenIds[c.id] = true;
       var copy = normalizeComment(serialize(c));
-      copy.page = PAGE;
+      copy.page = site ? sitePageKey(c.page, data.project) : PAGE;
       prepared.push(copy);
     });
     if (!prepared.length) {
@@ -3481,7 +3521,19 @@
     prepared.forEach(function (c) { remotePut(c, ["*"]); });
     loadData();
     var ok = prepared.length + (skipped ? " (" + skipped + " skipped)" : "");
-    toast("Imported " + ok + " comment" + (prepared.length === 1 ? "" : "s"), { kind: "success" });
+    var pages = site ? pageCount(prepared) : 1;
+    toast("Imported " + ok + " comment" + (prepared.length === 1 ? "" : "s") +
+      (pages > 1 ? " across " + pages + " pages" : ""), { kind: "success" });
+  }
+  // A site file's page keys carry the exporting project's prefix. Re-key
+  // them to this project so the same site imports under any project name;
+  // a missing page falls back to the importing page, as a page export does.
+  function sitePageKey(page, exportedProject) {
+    var key = typeof page === "string" ? page : "";
+    if (exportedProject && typeof exportedProject === "string" && key.indexOf(exportedProject + ":") === 0)
+      key = key.slice(exportedProject.length + 1);
+    if (!key) return PAGE;
+    return (CFG.project ? CFG.project + ":" : "") + key;
   }
 
   function copyLink(id) {
@@ -3576,6 +3628,15 @@
       canShare ? el("button", { class: "an-fbtn", title: "Send comments to " + state.share, html: ICONS.share + "<span>Share</span>", onclick: shareComments }) : null,
       el("button", { class: "an-fbtn", html: ICONS.upload + "<span>Import</span>", onclick: pickImportFile }),
     ]));
+    if (!REMOTE) {
+      var all = projectComments(), pages = pageCount(all);
+      if (all.length > n && pages > 1) footEl.appendChild(el("button", {
+        class: "an-sitebtn", "data-action": "download-site",
+        title: "Download the comments from every page of this site as one JSON file",
+        html: ICONS.download + "<span>All pages (" + all.length + " comment" + (all.length === 1 ? "" : "s") + ", " + pages + " pages)</span>",
+        onclick: function () { exportComments({ scope: "site" }); },
+      }));
+    }
   }
 
   // Copy text to the clipboard with graceful fallback + toast feedback.
@@ -3884,7 +3945,7 @@
     comments: function () { return state.comments.map(serialize); },
     focus: function (id) { focusComment(id, false); },
     toast: toast,
-    export: function () { exportComments(); },
+    export: function (options) { exportComments(options); },
     import: function () { pickImportFile(); },
     submit: submitAll,
     setStatus: function (id, status) { return setCommentStatus(id, status); },
