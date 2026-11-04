@@ -47,7 +47,7 @@
   var instance = null, lastConfig, lastScript;
   var activeKey = typeof Symbol === "function" ? Symbol.for("reviewjs.annotate.controller") : "__ANNOTATE_CONTROLLER__";
   var controller = {
-    version: "1.5.3",
+    version: "1.6.0",
     init: function (config, script) {
       if (!host || !host.document) throw new Error("Annotate.init requires a browser document");
       if (instance && config === undefined) return controller;
@@ -108,7 +108,7 @@
     return uiHost;
   }
 
-  var VERSION = "1.5.3";
+  var VERSION = "1.6.0";
 
   // --------------------------------------------------------------------------
   // CONFIG — resolved from (in priority order) the script tag's data-* attrs,
