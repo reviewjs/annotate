@@ -250,7 +250,20 @@ test.describe('public integration contract', () => {
       .toEqual(['Please review this']);
   });
 
-  test('credentials option controls whether backend and postUrl requests carry cookies', async ({ page, context }) => {
+  test('credentials option controls whether backend and postUrl requests carry cookies', async ({ page, context, browserName }) => {
+    // Playwright's WebKit does not expose the Cookie header to route handlers,
+    // even for fetch(..., { credentials: 'include' }). Record the credentials
+    // mode passed to fetch in every browser, and check the header elsewhere.
+    const cookieHeaderVisible = browserName !== 'webkit';
+    await page.addInitScript(() => {
+      const realFetch = window.fetch;
+      window.__credsSeen = [];
+      window.fetch = function (input, init) {
+        const url = typeof input === 'string' ? input : input.url;
+        if (url.includes('/__creds/')) window.__credsSeen.push({ url, credentials: init && init.credentials });
+        return realFetch.apply(this, arguments);
+      };
+    });
     await context.addCookies([{ name: 'proxy_session', value: 'signed-in', url: 'http://localhost:4200' }]);
     const seen = [];
     await page.route('**/__creds/**', async route => {
@@ -265,6 +278,7 @@ test.describe('public integration contract', () => {
     async function run(credentials) {
       seen.length = 0;
       await page.evaluate(credentials => {
+        window.__credsSeen.length = 0;
         window.Annotate.destroy();
         const config = {
           project: 'creds-' + (credentials || 'default'), postUrl: '/__creds/feedback',
@@ -293,21 +307,28 @@ test.describe('public integration contract', () => {
         api: seen.filter(r => r.path.includes('/comments')).map(r => r.cookie),
         post: seen.filter(r => r.path.endsWith('/feedback')).map(r => r.cookie),
         resolved: await page.evaluate(() => window.Annotate.config.credentials),
+        modes: await page.evaluate(() => [...new Set(window.__credsSeen.map(r => r.credentials))]),
       };
     }
 
     const omitted = await run(undefined);
     expect(omitted.resolved).toBe('omit');
+    expect(omitted.modes).toEqual(['omit']);
     expect(omitted.api[0]).toBe('');
     expect(omitted.post).toEqual(['']);
 
     const sameOrigin = await run('same-origin');
     expect(sameOrigin.resolved).toBe('same-origin');
-    expect(sameOrigin.api[0]).toContain('proxy_session=signed-in');
-    expect(sameOrigin.post).toEqual(['proxy_session=signed-in']);
+    expect(sameOrigin.modes).toEqual(['same-origin']);
+    expect(sameOrigin.post).toHaveLength(1);
+    if (cookieHeaderVisible) {
+      expect(sameOrigin.api[0]).toContain('proxy_session=signed-in');
+      expect(sameOrigin.post).toEqual(['proxy_session=signed-in']);
+    }
 
     const bogus = await run('everything');
     expect(bogus.resolved).toBe('omit');
+    expect(bogus.modes).toEqual(['omit']);
     expect(bogus.post).toEqual(['']);
   });
 
