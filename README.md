@@ -151,6 +151,7 @@ browser. The author's dashboard hands out this tag and the invite links:
 |---|---|
 | `data-api` | The backend origin. Without it the page stays local-only, exactly as above. |
 | `data-review-id` | The review this page belongs to. |
+| `data-credentials` | `omit` (default), `same-origin` or `include`. Whether backend and `data-post-url` requests carry cookies. Use `same-origin` when the backend shares the page's origin behind a cookie sign-in (an identity-aware proxy, for example). A cross-origin backend needs CORS with `Access-Control-Allow-Credentials` for `include`. |
 
 Reviewers arrive through a personal link, `https://your-site/page?an_invite=…`.
 The token is stored for that review in the reviewer's browser and removed from
@@ -166,6 +167,27 @@ site addresses registered on the review may use it.
   comments stay in the browser; Download or Copy sends them by email.
 - In a synced review there is nothing to submit: the footer reads "Sent to the
   review" as soon as a comment is posted.
+
+#### Your own sign-in (`auth`)
+
+When the backend sits behind your site's own sign-in, skip invite links and
+hand Annotate the session yourself (programmatic config only):
+
+```js
+Annotate.init({
+  api: "/review-api",            // same origin, behind your proxy
+  reviewId: "rvw_…",
+  credentials: "same-origin",    // send the proxy's session cookie
+  auth: {
+    getToken: () => mySession.token,        // bearer token, or null when signed out
+    getReviewer: () => ({ id: me.id, name: me.name, role: me.isOwner ? "author" : "reviewer" }),
+    onUnauthorized: () => mySession.signIn(),
+  },
+});
+```
+
+`getReviewer` is optional. Without it the viewer is unnamed and never gets
+the review author's controls.
 
 ## Framework integration
 
@@ -299,6 +321,11 @@ Sharing is an explicit action:
 4. You open the same page, click **Import** (⬆), pick the file — every comment
    reappears anchored in place.
 
+Reviewing a whole site? When other pages have comments too, the footer offers
+**All pages** under the buttons: one file with every page's comments. Import it
+on any page of the site and each comment goes back to the page it was made on
+(the project name may differ between the two browsers).
+
 To paste feedback directly into another tool, click **Copy** to copy the same
 complete, import-compatible JSON payload to the clipboard.
 
@@ -362,7 +389,8 @@ Annotate.disable();           // collapse to the launcher
 Annotate.setTool("highlight");// show the layer, then choose cursor | highlight | rect | circle | pen | pin
 Annotate.comments();          // → array of comment objects for this page
 Annotate.focus(id);           // scroll to & highlight a comment
-Annotate.export();            // trigger the JSON download
+Annotate.export();            // trigger the JSON download for this page
+Annotate.export({ scope: "site" }); // one file with every page's comments
 Annotate.import();            // open the file picker
 await Annotate.submit();      // POST the JSON export to postUrl
 Annotate.refresh();           // manually re-read the current page when spa is off
