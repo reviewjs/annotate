@@ -1,0 +1,88 @@
+rules_version = '2';
+
+// Security rules for @reviewjs/annotate's Firebase transport.
+//
+//   annotateReviews/{review}                    name, note, pages, open, closed
+//   annotateReviews/{review}/members/{uid}      { role: "author" | "reviewer", name }
+//   annotateReviews/{review}/comments/{id}      one AnnotateComment (replies embedded)
+//   annotateReviews/{review}/comments/{id}/activity/{event}
+//
+// A reviewer sees and changes only their own comments; an author sees and
+// changes all of them. Comments are never hard-deleted by a client: a delete
+// is an update to a tombstone, which a Firestore TTL policy on `purgeAt`
+// removes later.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /annotateReviews/{review} {
+      function signedIn() { return request.auth != null; }
+      function base() { return /databases/$(database)/documents/annotateReviews/$(review); }
+      function memberDoc(uid) { return /databases/$(database)/documents/annotateReviews/$(review)/members/$(uid); }
+      function isMember() { return signedIn() && exists(memberDoc(request.auth.uid)); }
+      function isAuthor() { return isMember() && get(memberDoc(request.auth.uid)).data.role == 'author'; }
+      function isClosed() { return get(base()).data.get('closed', false) == true; }
+      function isOpen() { return get(base()).data.get('open', false) == true; }
+      function validName(name) { return name is string && name.size() <= 80; }
+
+      // Name, note and page list are not secret; the join flow reads them
+      // before the viewer is a member. Reviews are created and edited in the
+      // Firebase console or with the Admin SDK.
+      allow read: if signedIn();
+      allow write: if false;
+
+      match /members/{uid} {
+        allow get: if signedIn() && (request.auth.uid == uid || isAuthor());
+        allow list: if isAuthor();
+
+        // Anyone signed in may join an open review as a reviewer, once.
+        allow create: if signedIn() && request.auth.uid == uid && isOpen() && !isClosed()
+          && request.resource.data.keys().hasOnly(['role', 'name'])
+          && request.resource.data.role == 'reviewer'
+          && validName(request.resource.data.name);
+
+        // A member may rename themselves but never change their role.
+        allow update: if isAuthor() || (
+          request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['role', 'name'])
+          && request.resource.data.role == resource.data.role
+          && validName(request.resource.data.name));
+        allow delete: if isAuthor();
+      }
+
+      match /comments/{id} {
+        function mine(data) { return data.authorId == request.auth.uid; }
+
+        // A member may read an id that does not exist yet: creating a comment
+        // is a read-then-write. This reveals that an id is unused, never whose
+        // comment a taken id is (ids are random client values, so nothing useful).
+        allow get: if isAuthor() || (isMember() && (resource == null || mine(resource.data)));
+        // Queries must filter by authorId == the caller (authors may list all).
+        allow list: if isAuthor() || (isMember() && mine(resource.data));
+
+        allow create: if isMember() && !isClosed()
+          && request.resource.data.id == id
+          && mine(request.resource.data)
+          && request.resource.data.get('deletedAt', null) == null
+          // Only authors address (assign) comments.
+          && (isAuthor() || request.resource.data.get('assignee', null) == null);
+
+        allow update: if isMember() && !isClosed()
+          && resource.data.get('deletedAt', null) == null
+          && (isAuthor() || mine(resource.data))
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.authorId == resource.data.authorId
+          && (isAuthor() || request.resource.data.get('assignee', null) == resource.data.get('assignee', null));
+
+        allow delete: if false;
+
+        match /activity/{event} {
+          function commentData() { return getAfter(/databases/$(database)/documents/annotateReviews/$(review)/comments/$(id)).data; }
+          allow read: if isAuthor() || (isMember() && get(/databases/$(database)/documents/annotateReviews/$(review)/comments/$(id)).data.authorId == request.auth.uid);
+          allow create: if isMember() && !isClosed()
+            && request.resource.data.by.id == request.auth.uid
+            && (isAuthor() || commentData().authorId == request.auth.uid);
+          allow update, delete: if false;
+        }
+      }
+    }
+  }
+}
