@@ -107,6 +107,31 @@ describe("replies and activity on someone else's comment", () => {
     await assertFails(updateDoc(bob, { status: "resolved" }));
     await assertFails(updateDoc(bob, { authorId: "bob" }));
   });
+  test("a reply's author may remove it from any comment, nobody else's", async () => {
+    const mixed = [reply("r0", "author"), reply("r1", "bob"), reply("r2", "alice")];
+    const fresh = async () => (await withComment({ replies: mixed })).ref;   // a successful write changes the thread, so each case gets its own
+    await assertFails(updateDoc((await fresh())("bob"), { replies: [mixed[1], mixed[2]] }));                              // bob removes the author's
+    await assertFails(updateDoc((await fresh())("bob"), { replies: [mixed[0], mixed[1]] }));                              // bob removes alice's
+    await assertFails(updateDoc((await fresh())("bob"), { replies: [mixed[0], reply("r1", "bob", { text: "rewritten" }), mixed[2]] }));
+    await assertFails(updateDoc((await fresh())("alice"), { replies: [mixed[0], mixed[2]] }));                            // the comment's owner cannot remove bob's reply
+    await assertSucceeds(updateDoc((await fresh())("bob"), { replies: [mixed[0], mixed[2]], updatedAt: "2026-02-01T00:00:00Z" }));   // bob removes his own, on alice's comment
+    await assertSucceeds(updateDoc((await fresh())("alice"), { replies: [mixed[0], mixed[1]], text: "and edits" }));      // alice removes her own, and edits
+    await assertSucceeds(updateDoc((await fresh())("author"), { replies: [mixed[2]] }));                                  // authors may remove any
+  });
+  test("a reply's author may remove the only reply, leaving the thread empty", async () => {
+    const { ref } = await withComment({ replies: [reply("r1", "bob")] });
+    await assertSucceeds(updateDoc(ref("bob"), { replies: [], updatedAt: "2026-02-01T00:00:00Z" }));
+  });
+  test("an owner cannot put words in another member's mouth on their own comment", async () => {
+    const { ref } = await withComment({ replies: [reply("r0", "author")] });
+    const alice = ref("alice"), old = [reply("r0", "author")];
+    await assertFails(updateDoc(alice, { replies: [...old, reply("r1", "author")] }));                                    // forged author reply
+    await assertFails(updateDoc(alice, { replies: [...old, reply("r1", "bob")] }));
+    await assertFails(updateDoc(alice, { replies: [reply("r0", "author", { text: "edited" })] }));                         // rewrites an author reply
+    await assertFails(updateDoc(alice, { replies: [...old, reply("r1", "alice"), reply("r2", "alice")] }));
+    await assertSucceeds(updateDoc(alice, { replies: [...old, reply("r1", "alice")], text: "reply and edit" }));            // her own reply, plus an edit
+    await assertSucceeds(updateDoc(alice, { text: "plain edit", status: "resolved" }));                                    // replies untouched
+  });
   test("no reply on a deleted comment, in a closed review, or by a non-member", async () => {
     const dead = await withComment({ deletedAt: "2026-01-01T00:00:00Z" });
     await assertFails(updateDoc(dead.ref("bob"), { replies: [reply("r1", "bob")] }));
@@ -122,7 +147,7 @@ describe("replies and activity on someone else's comment", () => {
     await assertSucceeds(updateDoc(author, { replies: [reply("r1", "author")] }));
     await assertFails(updateDoc(author, { authorId: "author" }));
   });
-  test("any member reads activity; a non-owner may log only their own reply event", async () => {
+  test("any member reads activity; a non-owner may log only reply events of their own", async () => {
     const { as, path, env } = await setup();
     await env.withSecurityRulesDisabled(async (c) => {
       await setDoc(doc(c.firestore(), ...path("comments", "ca")), comment("ca", "alice"));
@@ -134,6 +159,7 @@ describe("replies and activity on someone else's comment", () => {
     await assertFails(getDocs(collection(as("carol"), ...path("comments", "ca", "activity"))));
     const event = (kind, uid = "bob") => ({ at: "2026-02-01T00:00:00Z", by: { id: uid, name: "B" }, kind });
     await assertSucceeds(setDoc(doc(bob, ...path("comments", "ca", "activity", "e1")), event("replied")));
+    await assertSucceeds(setDoc(doc(bob, ...path("comments", "ca", "activity", "e1b")), event("reply_deleted")));
     await assertFails(setDoc(doc(bob, ...path("comments", "ca", "activity", "e2")), event("status")));                 // not their comment
     await assertFails(setDoc(doc(bob, ...path("comments", "ca", "activity", "e3")), event("replied", "alice")));      // forged actor
     await assertFails(setDoc(doc(bob, ...path("comments", "ca", "activity", "e0")), event("replied")));              // no overwrite

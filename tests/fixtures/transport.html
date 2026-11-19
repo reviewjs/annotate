@@ -50,9 +50,9 @@
       // Without a page override the SPA test follows location.pathname.
     };
     if (params.get('spa') === '1') delete window.AnnotateConfig.page;
-    window.__wire = function (id, text, page) {
+    window.__wire = function (id, text, page, authorId) {
       var now = new Date().toISOString();
-      return { schema: 2, id: id, page: page, url: location.href, type: 'pin', author: 'Ann', authorId: 'rvr_ann', text: text,
+      return { schema: 2, id: id, page: page, url: location.href, type: 'pin', author: authorId === 'rvr_t' ? 'Tess' : 'Ann', authorId: authorId || 'rvr_ann', text: text,
         color: '#ff0000', anchor: null, geom: { kind: 'pin', selector: '#title', x: 0.5, y: 0.5, vw: 1000, vh: 800 },
         visibility: 'shared', status: 'open', resolved: false, resolvedBy: null, resolvedAt: null, assignee: null, assignedAt: null,
         replies: [], createdAt: now, updatedAt: now, editedAt: null };

@@ -350,6 +350,9 @@ const createController = function (host) {
   // so any comment in it may be deleted. A review backend allows the creator
   // and review authors.
   function canDelete(c) { return !REMOTE || isMine(c) || isReviewAuthor(); }
+  // Closing or reopening follows the same rule: on a transport that shows
+  // everyone's comments, a reviewer may close only their own.
+  function canClose(c) { return !REMOTE || isMine(c) || isReviewAuthor(); }
   // Review authors (session role "author") see every reviewer's comments
   // and address them; reviewers only ever receive their own.
   function isReviewAuthor() { return REMOTE && !!sync.reviewer && sync.reviewer.role === "author"; }
@@ -521,7 +524,7 @@ const createController = function (host) {
     token: null, expiresAt: 0, reviewer: null, sessionPromise: null, refused: false,
     inflight: null, timer: 0, pollTimer: 0, polling: false, etag: "", etagPage: "",
     failures: 0, offline: false, held: false, state: "", acks: 0, waiters: [], controllers: new Set(),
-    baselined: {}, unsubscribe: null, subPage: "", resync: false, ackedAt: 0, lastList: null, settle: 0,
+    baselined: {}, seesOthers: false, unsubscribe: null, subPage: "", resync: false, ackedAt: 0, lastList: null, settle: 0,
   };
   var queueOk = true, queueMem = [];
 
@@ -1055,7 +1058,7 @@ const createController = function (host) {
     // The first read of a page this session sets read marks for comments
     // never seen before; after that, a new or changed server record with no
     // local op behind it is someone else's change and counts as unread.
-    var marks = readMarks(), first = !sync.baselined[PAGE], fresh = 0, removed = 0;
+    var marks = readMarks(), first = !sync.baselined[PAGE], fresh = 0, removed = 0, freshOthers = 0, removedOthers = 0;
     sync.baselined[PAGE] = true;
     list.forEach(function (w) {
       var c = fromWire(w);
@@ -1065,7 +1068,9 @@ const createController = function (host) {
       stamps[c.id] = w.updatedAt;
       if (!pending[c.id]) {
         if (marks[c.id] === undefined && (first || c.authorId && c.authorId === state.authorId)) marks[c.id] = w.updatedAt;
-        else if (previous !== w.updatedAt && (marks[c.id] === undefined || w.updatedAt > marks[c.id])) fresh++;
+        else if (previous !== w.updatedAt && (marks[c.id] === undefined || w.updatedAt > marks[c.id])) {
+          if (!isReviewAuthor() && !isMine(c)) freshOthers++; else fresh++;
+        }
       }
       var ops = pending[c.id];
       if (ops && ops.some(function (o) { return o.t === "del"; })) return;
@@ -1075,7 +1080,7 @@ const createController = function (host) {
     d.comments.forEach(function (c) {
       if (!c || c.page !== PAGE || seen[c.id]) return;
       if (pending[c.id]) { kept.push(c); return; }
-      if (stamps[c.id] && !keepMissing) { delete stamps[c.id]; delete marks[c.id]; removed++; return; }   // deleted remotely
+      if (stamps[c.id] && !keepMissing) { delete stamps[c.id]; delete marks[c.id]; if (!isReviewAuthor() && !isMine(c)) removedOthers++; else removed++; return; }   // deleted remotely
       if (stamps[c.id]) { kept.push(c); return; }   // maybe our own write, not in this snapshot yet
       kept.push(c);   // never reached the server (private, or rejected): stays local
     });
@@ -1084,11 +1089,19 @@ const createController = function (host) {
     d.comments = kept.filter(function (c) { return c.page !== PAGE; }).concat(pageList);
     dbWrite(d);
     writeMarks(marks);
+    // A reviewer may also receive other reviewers' comments (a transport that
+    // shares them), so changes to those are not "the review owner's".
+    if (!isReviewAuthor() && (freshOthers || removedOthers)) sync.seesOthers = true;
     if (fresh) toast(isReviewAuthor()
       ? fresh + " comment" + (fresh === 1 ? "" : "s") + " changed on this page"
+      : sync.seesOthers ? fresh + " of your comments " + (fresh === 1 ? "has" : "have") + " new activity"
       : "The review owner updated " + fresh + " of your comments", { kind: "info", duration: 6000 });
+    if (freshOthers)
+      toast(freshOthers + " comment" + (freshOthers === 1 ? "" : "s") + " from other reviewers " + (freshOthers === 1 ? "was" : "were") + " added or changed", { kind: "info", duration: 6000 });
     if (removed && !isReviewAuthor())
       toast("The review owner removed " + removed + " of your comments", { kind: "info", duration: 6000 });
+    if (removedOthers)
+      toast(removedOthers + " comment" + (removedOthers === 1 ? "" : "s") + " from other reviewers " + (removedOthers === 1 ? "was" : "were") + " removed", { kind: "info", duration: 6000 });
     afterSync();
   }
 
@@ -3171,11 +3184,11 @@ const createController = function (host) {
         el("button", { class: "an-mini", html: ICONS.reply + "<span>Reply</span>", onclick: function (e) {
           e.stopPropagation(); rbox.classList.toggle("an-show"); rin.focus();
         } }),
-        el("button", { class: "an-mini", html: (c.resolved ? "" : ICONS.check) + "<span>" + (c.resolved ? "Reopen" : "Resolve") + "</span>", onclick: function (e) {
+        canClose(c) ? el("button", { class: "an-mini", html: (c.resolved ? "" : ICONS.check) + "<span>" + (c.resolved ? "Reopen" : "Resolve") + "</span>", onclick: function (e) {
           e.stopPropagation();
           var updated = patchComment(c.id, { resolved: !c.resolved });
           if (updated) { mergeComment(updated); renderAll(); renderPanel(); }
-        } }),
+        } }) : null,
         !REMOTE || isReviewAuthor() ? statusSelect(c) : null,
         assignButton(c),
         isMine(c) ? el("button", { class: "an-mini", html: ICONS.edit + "<span>Edit</span>", onclick: function (e) {

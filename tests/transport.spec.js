@@ -82,3 +82,46 @@ test('destroy unsubscribes and tears the transport down', async ({ page }) => {
   expect(await page.evaluate(() => window.__t.subs[0].live)).toBe(false);
   expect(await page.evaluate(() => window.__t.destroyed)).toBe(1);
 });
+
+// A transport can show a reviewer everyone's comments (Firebase does). The
+// viewer in the fixture is the reviewer rvr_t.
+test.describe('a reviewer who sees other reviewers\' comments', () => {
+  const push = (page, list) => page.evaluate(l => window.__t.subs[0].push(l.map(c => window.__wire(c.id, c.text, '/t', c.by))), list);
+
+  test('can close only their own comments', async ({ page }) => {
+    await open(page);
+    await page.waitForFunction(() => window.__t.subs.length === 1);
+    await push(page, [{ id: 'cmine', text: 'Mine', by: 'rvr_t' }, { id: 'ctheirs', text: 'Theirs', by: 'rvr_ann' }]);
+    const resolve = text => page.locator('.an-card', { hasText: text }).locator('.an-mini', { hasText: /Resolve|Reopen/ });
+    await expect(page.locator('.an-card', { hasText: 'Theirs' })).toHaveCount(1);
+    await expect(resolve('Mine')).toHaveCount(1);
+    await expect(resolve('Theirs')).toHaveCount(0);
+    await expect(page.locator('.an-card', { hasText: 'Theirs' }).locator('.an-mini', { hasText: 'Reply' })).toHaveCount(1);
+    await expect(page.locator('.an-card', { hasText: 'Theirs' }).locator('.an-mini', { hasText: 'Edit' })).toHaveCount(0);
+  });
+
+  test('is told about other reviewers\' changes without blaming the review owner', async ({ page }) => {
+    await open(page);
+    await page.waitForFunction(() => window.__t.subs.length === 1);
+    await push(page, [{ id: 'cmine', text: 'Mine', by: 'rvr_t' }]);   // baseline: nothing is news yet
+    await expect(page.locator('.an-card', { hasText: 'Mine' })).toHaveCount(1);
+    await push(page, [{ id: 'cmine', text: 'Mine', by: 'rvr_t' }, { id: 'cnew', text: 'Fresh', by: 'rvr_ann' }]);
+    await expect(page.locator('.an-toast', { hasText: '1 comment from other reviewers was added or changed' })).toBeVisible();
+    await push(page, [{ id: 'cmine', text: 'Mine', by: 'rvr_t' }]);
+    await expect(page.locator('.an-toast', { hasText: '1 comment from other reviewers was removed' })).toBeVisible();
+    await expect(page.locator('.an-toast', { hasText: 'review owner' })).toHaveCount(0);
+  });
+
+  test('changes to their own comment read as activity once others are visible', async ({ page }) => {
+    await open(page);
+    await page.waitForFunction(() => window.__t.subs.length === 1);
+    await push(page, [{ id: 'cmine', text: 'Mine', by: 'rvr_t' }]);
+    await push(page, [{ id: 'cmine', text: 'Mine', by: 'rvr_t' }, { id: 'cnew', text: 'Fresh', by: 'rvr_ann' }]);   // now it is a shared view
+    await page.evaluate(() => {
+      const w = window.__wire('cmine', 'Mine', '/t', 'rvr_t');
+      w.updatedAt = new Date(Date.now() + 5000).toISOString(); w.replies = [{ id: 'r1', author: 'Ann', authorId: 'rvr_ann', text: 'hi', createdAt: w.updatedAt, editedAt: null }];
+      window.__t.subs[0].push([w, window.__wire('cnew', 'Fresh', '/t', 'rvr_ann')]);
+    });
+    await expect(page.locator('.an-toast', { hasText: '1 of your comments has new activity' })).toBeVisible();
+  });
+});

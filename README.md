@@ -231,8 +231,8 @@ Reviewers can create comments and edit, resolve or delete only their own;
 authors can change anyone's and are the only ones who assign. (This is a
 behaviour change from the first version of the adapter, where reviewers saw
 only their own comments, and it differs from the HTTP backend, which keeps
-reviewers apart. A reviewer cannot remove their reply from someone else's
-comment; an author can.) Offline edits are queued and sent when the connection returns.
+reviewers apart. A reply can be removed only by its own author or by an
+author, and nobody can write words in another member's name.) Offline edits are queued and sent when the connection returns.
 `Annotate.syncState().live` is `true` while updates are pushed. The emulator
 suites (`npm run test:firebase`, `npm run test:firebase:e2e`) show it end to end. The design and its
 limits (for example, there are no invite links) are in

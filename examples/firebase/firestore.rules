@@ -8,9 +8,9 @@ rules_version = '2';
 //   annotateReviews/{review}/comments/{id}/activity/{event}
 //
 // Every member of a review reads every comment and its activity, and may
-// reply to any comment. Writes are narrower: a reviewer creates comments and
-// edits, resolves or deletes only their own; an author may change anyone's and
-// is the only one who assigns. Comments are never hard-deleted by a client: a
+// reply to any comment (and remove their own reply). Writes are narrower: a
+// reviewer creates comments and edits, resolves or deletes only their own; an
+// author may change anyone's and is the only one who assigns. Comments are never hard-deleted by a client: a
 // delete is an update to a tombstone, which a Firestore TTL policy on
 // `purgeAt` removes later.
 //
@@ -61,18 +61,37 @@ service cloud.firestore {
         // a comment is read-then-write).
         allow get, list: if isMember();
 
-        // A member who does not own the comment may add exactly one reply and
-        // change nothing else.
-        function appendsOneOwnReply() {
-          let before = resource.data.get('replies', []);
-          let after = request.resource.data.get('replies', []);
-          return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['replies', 'updatedAt'])
-            && after.size() == before.size() + 1
+        // Replies live inside the comment document, so these helpers pin down
+        // what a non-author may do to them: leave them alone, append exactly one
+        // of their own, or remove exactly one of their own. Nobody but an author
+        // can write words in another member's name or touch their replies.
+        function repliesBefore() { return resource.data.get('replies', []); }
+        function repliesAfter() { return request.resource.data.get('replies', []); }
+        function repliesUnchanged() { return repliesAfter() == repliesBefore(); }
+        function appendsOwnReply() {
+          let before = repliesBefore();
+          let after = repliesAfter();
+          return after.size() == before.size() + 1
             && after.size() <= 500
             // (slicing an empty prefix is a rules evaluation error, hence the guard)
             && (before.size() == 0 || after[0:before.size()] == before)
             && after[before.size()].authorId == request.auth.uid
             && after[before.size()].keys().hasOnly(['id', 'author', 'authorId', 'text', 'createdAt', 'editedAt']);
+        }
+        function removesOwnReply() {
+          let before = repliesBefore();
+          let after = repliesAfter();
+          let gone = before.removeAll(after);
+          return after.size() == before.size() - 1
+            && before.hasAll(after)
+            && gone.size() == 1
+            && gone[0].authorId == request.auth.uid;
+        }
+        function onlyRepliesChange() {
+          return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['replies', 'updatedAt']);
+        }
+        function assigneeUnchanged() {
+          return request.resource.data.get('assignee', null) == resource.data.get('assignee', null);
         }
 
         allow create: if isMember() && !isClosed()
@@ -87,9 +106,14 @@ service cloud.firestore {
           && request.resource.data.id == resource.data.id
           && request.resource.data.authorId == resource.data.authorId
           && (
-            ((isAuthor() || mine(resource.data))
-              && (isAuthor() || request.resource.data.get('assignee', null) == resource.data.get('assignee', null)))
-            || appendsOneOwnReply()
+            // An author may change anything on any comment.
+            isAuthor()
+            // The owner edits their own comment (not the assignee) and may add
+            // or remove their own replies on it.
+            || (mine(resource.data) && assigneeUnchanged()
+                && (repliesUnchanged() || appendsOwnReply() || removesOwnReply()))
+            // Any other member changes nothing but their own reply.
+            || (onlyRepliesChange() && (appendsOwnReply() || removesOwnReply()))
           );
 
         allow delete: if false;
@@ -99,9 +123,10 @@ service cloud.firestore {
           allow read: if isMember();
           allow create: if isMember() && !isClosed()
             && request.resource.data.by.id == request.auth.uid
-            // Non-owners may only log their own reply; everything else is the
-            // comment owner's or an author's.
-            && (isAuthor() || commentData().authorId == request.auth.uid || request.resource.data.kind == 'replied');
+            // Non-owners may only log adding or removing their own reply;
+            // everything else is the comment owner's or an author's.
+            && (isAuthor() || commentData().authorId == request.auth.uid
+                || request.resource.data.kind in ['replied', 'reply_deleted']);
           allow update, delete: if false;
         }
       }

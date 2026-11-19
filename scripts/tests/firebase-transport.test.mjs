@@ -122,7 +122,7 @@ describe("visibility and roles", () => {
       assert.deepEqual(await ids(u, ""), ["ca", "cb", "cc"]);
     }
   });
-  test("someone else's comment: any member may reply and read its history, but not edit, resolve or delete it", async () => {
+  test("someone else's comment: any member may reply, remove their own reply and read its history, but not edit, resolve or delete it", async () => {
     const { alice, bob, author } = await room();
     const made = (await call(alice, "PUT", "/comments/ca", wire("ca", "/p"))).body.comment;
     // Writes stay with the owner and the authors.
@@ -139,10 +139,12 @@ describe("visibility and roles", () => {
     // The comment itself is untouched, and its owner and authors see the reply.
     const seen = (await call(alice, "GET", "/comments?page=%2Fp")).body.comments[0];
     assert.deepEqual([seen.text, seen.status, seen.replies.length], ["Hello", "open", 1]);
-    // Removing a reply is a write: only its author on their own comment, or an author.
-    assert.equal((await call(bob, "DELETE", "/comments/ca/replies/rb")).body.error, "not_owner");
-    assert.equal((await call(alice, "DELETE", "/comments/ca/replies/rb")).body.error, "not_owner");
-    assert.equal((await call(author, "DELETE", "/comments/ca/replies/rb")).status, 204);
+    // Removing a reply is a write: only its author (on any comment) or an author.
+    assert.equal((await call(alice, "DELETE", "/comments/ca/replies/rb")).body.error, "not_owner");   // the comment's owner, not the reply's
+    assert.equal((await call(bob, "DELETE", "/comments/ca/replies/rb")).status, 204);
+    assert.deepEqual((await call(alice, "GET", "/comments?page=%2Fp")).body.comments[0].replies, []);
+    await call(bob, "POST", "/comments/ca/replies", { id: "rb2", text: "Again" });
+    assert.equal((await call(author, "DELETE", "/comments/ca/replies/rb2")).status, 204);
     // A deleted comment still answers 410 to a reply.
     await call(alice, "DELETE", "/comments/ca");
     assert.equal((await call(bob, "POST", "/comments/ca/replies", { id: "r2", text: "late" })).status, 410);

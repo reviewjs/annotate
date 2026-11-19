@@ -80,7 +80,8 @@ The rules are the trust boundary; `firebase.mjs` runs in the attacker's browser.
 `rules` tests attack Firestore directly. Enforced: **every member reads every
 comment and its activity and may reply to any comment** (a non-owner's update may
 change nothing but `replies` and `updatedAt`, and only append one reply of their
-own); a reviewer creates comments and edits, resolves or deletes only their own;
+own or remove one of their own); a comment's owner may likewise add or remove only
+their own replies, so nobody can write words in another member's name; a reviewer creates comments and edits, resolves or deletes only their own;
 `authorId` is immutable and must be the caller; only authors assign; no client
 hard-deletes; tombstones cannot be revived; nobody promotes themselves; closed
 reviews take no writes; and joining needs `open: true`.
@@ -95,18 +96,16 @@ Transports section. Consequently **membership is the privacy boundary**: with
 
 Known limits, chosen deliberately:
 
-- **Owner-controlled fields.** A reviewer can write any field of their own comment,
-  including forging another member's reply inside it. That document is now visible
-  to every member, so a forged reply is too (before, only the owner and the
-  authors saw it). Closing this needs a Cloud Function, or a rule that lets an
-  owner only append their own replies, which would also stop them deleting their
-  own reply.
+- **Owner-controlled fields.** A reviewer can write any other field of their own
+  comment (text, geometry, colour). They cannot add, change or remove anyone
+  else's reply: the rules allow a reply change only if it appends or removes
+  exactly one reply authored by the caller. Authors may change anything.
 - **Client clocks.** `updatedAt` is the stale-check base and comes from the browser.
   The adapter keeps it strictly increasing per document, so skew cannot reorder
   writes, but it is not a trusted timestamp.
-- **Reply removal.** The rules let a non-owner append a reply, never remove one, so
-  a reviewer cannot delete their own reply on someone else's comment (the adapter
-  answers `403 not_owner`); an author can.
+- **Reply removal.** A reply's author may remove it from any comment; an author may
+  remove any reply. A comment's owner cannot remove someone else's reply (the
+  adapter answers `403 not_owner`).
 - **Document size.** Replies are embedded; Firestore's 1 MiB limit applies
   (the adapter answers 413). Activity events are not removed with the tombstone.
 - **Invites.** There is no invite-link flow. Reviews are `open` (any signed-in

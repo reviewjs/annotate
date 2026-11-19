@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>annotate.js + Firebase demo</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; color: #1b1f24; }
+    code { background: #eef0f3; padding: .1em .35em; border-radius: 4px; }
+    #bar { border: 1px solid #d0d7de; border-radius: 8px; padding: .75rem 1rem; margin: 1rem 0; background: #f6f8fa; }
+    #bar b { font-weight: 600; }
+    .muted { color: #57606a; font-size: .9rem; }
+    pre { background: #f6f8fa; padding: .75rem 1rem; border-radius: 8px; overflow: auto; }
+  </style>
+  <!-- No bundler: an import map points the Firebase SDK names at Google's CDN build. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "firebase/app": "https://www.gstatic.com/firebasejs/13.4.0/firebase-app.js",
+      "firebase/auth": "https://www.gstatic.com/firebasejs/13.4.0/firebase-auth.js",
+      "firebase/firestore": "https://www.gstatic.com/firebasejs/13.4.0/firebase-firestore.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <h1 id="title">Pricing page review</h1>
+  <p id="para">Select text, draw, or drop a pin on this page. Everyone on the review sees every comment as it is posted, and can reply.</p>
+
+  <div id="bar"><b>Starting…</b></div>
+
+  <h2>Try it</h2>
+  <p class="muted">Run the emulators and this page's server from the repository root:</p>
+  <pre>npx firebase emulators:start --config examples/firebase/firebase.json --only auth,firestore --project demo-annotate
+npm start</pre>
+  <ol>
+    <li>Open <a href="?emulator=1&amp;author=1"><code>?emulator=1&amp;author=1</code></a>: you are the review's <b>author</b>.</li>
+    <li>Open <a href="?emulator=1"><code>?emulator=1</code></a> in a <b>private window</b> (a second browser identity): you are a <b>reviewer</b>.</li>
+    <li>Comment in one window and watch it appear in the other.</li>
+  </ol>
+  <p class="muted">Why a private window: annotate keeps one identity per browser, and Firebase's anonymous sign-in is per browser too.
+    <code>author=1</code> only works against the emulator, which lets this page write the review's member list directly. With a real project, add authors in the console.</p>
+
+  <h2>Your own project</h2>
+  <p class="muted">Edit <code>FIREBASE_CONFIG</code> below, deploy <code>firestore.rules</code>, create <code>annotateReviews/demo</code> with <code>{ name, open: true }</code>, then open this page without <code>emulator</code>. Add <code>?google=1</code> to sign in with Google instead of anonymously (do that for authors).</p>
+
+  <script type="module">
+    import { initializeApp } from "firebase/app";
+    import { GoogleAuthProvider, connectAuthEmulator, getAuth, signInAnonymously, signInWithPopup } from "firebase/auth";
+    import { connectFirestoreEmulator, getFirestore } from "firebase/firestore";
+    import Annotate from "../../annotate.mjs";
+    import { firebaseTransport } from "../../firebase.mjs";
+
+    // For your own project: paste your Firebase web config here.
+    const FIREBASE_CONFIG = null; // { apiKey: "...", authDomain: "...", projectId: "..." }
+
+    const params = new URLSearchParams(location.search);
+    const emulator = params.has("emulator");
+    const REVIEW = params.get("review") || "demo";
+    const bar = document.getElementById("bar");
+    const say = (html) => { bar.innerHTML = html; };
+
+    if (!emulator && !FIREBASE_CONFIG) {
+      say("<b>No Firebase project configured.</b> Use <code>?emulator=1</code>, or set <code>FIREBASE_CONFIG</code> in this file.");
+    } else {
+      try {
+        const app = initializeApp(emulator ? { projectId: "demo-annotate", apiKey: "fake" } : FIREBASE_CONFIG);
+        const auth = getAuth(app), db = getFirestore(app);
+        if (emulator) {
+          connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
+          connectFirestoreEmulator(db, "127.0.0.1", 8080);
+        }
+        const signIn = params.has("google") && !emulator
+          ? (a) => signInWithPopup(a, new GoogleAuthProvider())
+          : (a) => signInAnonymously(a);
+        await auth.authStateReady();
+        if (!auth.currentUser) await signIn(auth);
+        const uid = auth.currentUser.uid;
+
+        if (emulator) {
+          // Emulator-only: its REST API accepts "Bearer owner" as an admin that skips the
+          // security rules. That is how this page creates the review and promotes itself.
+          const base = `http://127.0.0.1:8080/v1/projects/demo-annotate/databases/(default)/documents/annotateReviews/${REVIEW}`;
+          const put = (path, fields) => fetch(base + path, {
+            method: "PATCH", headers: { Authorization: "Bearer owner", "Content-Type": "application/json" }, body: JSON.stringify({ fields }),
+          });
+          const str = (v) => ({ stringValue: v });
+          await put("", { name: str("Demo review"), open: { booleanValue: true } });
+          if (params.has("author")) await put(`/members/${uid}`, { role: str("author"), name: str("Author") });
+        }
+
+        Annotate.init({ project: "firebase-demo", reviewId: REVIEW, page: "/firebase-demo", startOpen: true,
+          transport: firebaseTransport({ app, reviewId: REVIEW, firestore: db, auth }) });
+        window.addEventListener("annotate:auth", (e) => {
+          const r = e.detail.reviewer;
+          say(`Signed in as <b>${r ? r.role : "…"}</b>${r && r.name ? " (" + r.name + ")" : ""} · uid <code>${uid}</code>`
+            + (emulator ? " · emulator" : ""));
+        });
+        window.addEventListener("annotate:sync", (e) => {
+          bar.dataset.live = String(!!e.detail.live);
+        });
+        say(`Connected · uid <code>${uid}</code>${emulator ? " · emulator" : ""}`);
+      } catch (error) {
+        say("<b>Could not start:</b> " + String(error && error.message || error) + (emulator ? " (are the emulators running?)" : ""));
+      }
+    }
+  </script>
+</body>
+</html>

@@ -303,10 +303,9 @@ export function firebaseTransport(options) {
       const isAuthor = me.role === "author";
       const found = (cur.replies || []).find((r) => r.id === replyId);
       if (!found) return reply(204);
-      // Removing a reply is a write. Authors may remove any; a reviewer may
-      // only remove their own reply on their own comment (the rules let a
-      // non-owner append replies, never remove them).
-      if (!isAuthor && (cur.authorId !== me.uid || found.authorId !== me.uid)) return fail(403, "not_owner");
+      // Removing a reply is a write: its author may remove it, on any comment,
+      // and review authors may remove any reply (the rules agree).
+      if (!isAuthor && found.authorId !== me.uid) return fail(403, "not_owner");
       const t = stamp(cur.updatedAt);
       tx.set(ref, { ...cur, updatedAt: t, replies: cur.replies.filter((r) => r.id !== replyId) });
       tx.set(doc(activityCol(id)), event(me, t, "reply_deleted", { replyId }));
