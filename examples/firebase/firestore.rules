@@ -1,0 +1,135 @@
+rules_version = '2';
+
+// Security rules for @reviewjs/annotate's Firebase transport.
+//
+//   annotateReviews/{review}                    name, note, pages, open, closed
+//   annotateReviews/{review}/members/{uid}      { role: "author" | "reviewer", name }
+//   annotateReviews/{review}/comments/{id}      one AnnotateComment (replies embedded)
+//   annotateReviews/{review}/comments/{id}/activity/{event}
+//
+// Every member of a review reads every comment and its activity, and may
+// reply to any comment (and remove their own reply). Writes are narrower: a
+// reviewer creates comments and edits, resolves or deletes only their own; an
+// author may change anyone's and is the only one who assigns. Comments are never hard-deleted by a client: a
+// delete is an update to a tombstone, which a Firestore TTL policy on
+// `purgeAt` removes later.
+//
+// Membership is the privacy boundary: with `open: true` anyone signed in can
+// join and so can read everything in the review. Keep `open: false` and add
+// members yourself when the comments must not be visible to every visitor.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /annotateReviews/{review} {
+      function signedIn() { return request.auth != null; }
+      function base() { return /databases/$(database)/documents/annotateReviews/$(review); }
+      function memberDoc(uid) { return /databases/$(database)/documents/annotateReviews/$(review)/members/$(uid); }
+      function isMember() { return signedIn() && exists(memberDoc(request.auth.uid)); }
+      function isAuthor() { return isMember() && get(memberDoc(request.auth.uid)).data.role == 'author'; }
+      function isClosed() { return get(base()).data.get('closed', false) == true; }
+      function isOpen() { return get(base()).data.get('open', false) == true; }
+      function validName(name) { return name is string && name.size() <= 80; }
+
+      // Name, note and page list are not secret; the join flow reads them
+      // before the viewer is a member. Reviews are created and edited in the
+      // Firebase console or with the Admin SDK.
+      allow read: if signedIn();
+      allow write: if false;
+
+      match /members/{uid} {
+        allow get: if signedIn() && (request.auth.uid == uid || isAuthor());
+        allow list: if isAuthor();
+
+        // Anyone signed in may join an open review as a reviewer, once.
+        allow create: if signedIn() && request.auth.uid == uid && isOpen() && !isClosed()
+          && request.resource.data.keys().hasOnly(['role', 'name'])
+          && request.resource.data.role == 'reviewer'
+          && validName(request.resource.data.name);
+
+        // A member may rename themselves but never change their role.
+        allow update: if isAuthor() || (
+          request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['role', 'name'])
+          && request.resource.data.role == resource.data.role
+          && validName(request.resource.data.name));
+        allow delete: if isAuthor();
+      }
+
+      match /comments/{id} {
+        function mine(data) { return data.authorId == request.auth.uid; }
+
+        // Reads: any member, including an id that does not exist yet (creating
+        // a comment is read-then-write).
+        allow get, list: if isMember();
+
+        // Replies live inside the comment document, so these helpers pin down
+        // what a non-author may do to them: leave them alone, append exactly one
+        // of their own, or remove exactly one of their own. Nobody but an author
+        // can write words in another member's name or touch their replies.
+        function repliesBefore() { return resource.data.get('replies', []); }
+        function repliesAfter() { return request.resource.data.get('replies', []); }
+        function repliesUnchanged() { return repliesAfter() == repliesBefore(); }
+        function appendsOwnReply() {
+          let before = repliesBefore();
+          let after = repliesAfter();
+          return after.size() == before.size() + 1
+            && after.size() <= 500
+            // (slicing an empty prefix is a rules evaluation error, hence the guard)
+            && (before.size() == 0 || after[0:before.size()] == before)
+            && after[before.size()].authorId == request.auth.uid
+            && after[before.size()].keys().hasOnly(['id', 'author', 'authorId', 'text', 'createdAt', 'editedAt']);
+        }
+        function removesOwnReply() {
+          let before = repliesBefore();
+          let after = repliesAfter();
+          let gone = before.removeAll(after);
+          return after.size() == before.size() - 1
+            && before.hasAll(after)
+            && gone.size() == 1
+            && gone[0].authorId == request.auth.uid;
+        }
+        function onlyRepliesChange() {
+          return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['replies', 'updatedAt']);
+        }
+        function assigneeUnchanged() {
+          return request.resource.data.get('assignee', null) == resource.data.get('assignee', null);
+        }
+
+        allow create: if isMember() && !isClosed()
+          && request.resource.data.id == id
+          && mine(request.resource.data)
+          && request.resource.data.get('deletedAt', null) == null
+          // Only authors address (assign) comments.
+          && (isAuthor() || request.resource.data.get('assignee', null) == null);
+
+        allow update: if isMember() && !isClosed()
+          && resource.data.get('deletedAt', null) == null
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.authorId == resource.data.authorId
+          && (
+            // An author may change anything on any comment.
+            isAuthor()
+            // The owner edits their own comment (not the assignee) and may add
+            // or remove their own replies on it.
+            || (mine(resource.data) && assigneeUnchanged()
+                && (repliesUnchanged() || appendsOwnReply() || removesOwnReply()))
+            // Any other member changes nothing but their own reply.
+            || (onlyRepliesChange() && (appendsOwnReply() || removesOwnReply()))
+          );
+
+        allow delete: if false;
+
+        match /activity/{event} {
+          function commentData() { return getAfter(/databases/$(database)/documents/annotateReviews/$(review)/comments/$(id)).data; }
+          allow read: if isMember();
+          allow create: if isMember() && !isClosed()
+            && request.resource.data.by.id == request.auth.uid
+            // Non-owners may only log adding or removing their own reply;
+            // everything else is the comment owner's or an author's.
+            && (isAuthor() || commentData().authorId == request.auth.uid
+                || request.resource.data.kind in ['replied', 'reply_deleted']);
+          allow update, delete: if false;
+        }
+      }
+    }
+  }
+}

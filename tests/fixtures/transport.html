@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Transport fixture</title>
+</head>
+<body>
+  <main id="content" style="min-height:600px">
+    <h1 id="title">Pricing</h1>
+    <p id="para">The quick brown fox jumps over the lazy dog.</p>
+  </main>
+  <!-- An in-memory transport stands in for a database adapter (Firebase, ...).
+       Tests drive it through window.__t. -->
+  <script>
+    var params = new URLSearchParams(location.search);
+    var t = window.__t = {
+      requests: [], subs: [], unsubscribed: 0, destroyed: 0, store: {}, noSubscribe: params.get('nosub') === '1',
+    };
+    function reply(status, body, headers) {
+      return Promise.resolve(new Response(body === undefined ? null : JSON.stringify(body), { status: status, headers: headers || {} }));
+    }
+    var transport = {
+      request: function (method, path, init) {
+        t.requests.push({ method: method, path: path, body: init && init.body });
+        if (method === 'POST' && path === '/session')
+          return reply(200, { token: 'tok', expiresAt: new Date(Date.now() + 3600000).toISOString(), reviewer: { id: 'rvr_t', name: 'Tess', role: 'reviewer' }, review: { id: 'rvw_t', name: 'T', note: '', pages: [] } });
+        var m = /^\/comments\/([^/?]+)$/.exec(path);
+        if (method === 'PUT' && m) {
+          var c = Object.assign({}, init.body, { updatedAt: new Date().toISOString(), authorId: 'rvr_t' });
+          t.store[m[1]] = c;
+          return reply(201, { comment: c });
+        }
+        if (method === 'GET' && path.indexOf('/comments?') === 0) {
+          return reply(200, { comments: Object.values(t.store) }, { ETag: '"x"' });
+        }
+        return reply(204);
+      },
+      destroy: function () { t.destroyed++; },
+    };
+    if (!t.noSubscribe) {
+      transport.subscribe = function (page, onComments, onError) {
+        var sub = { page: page, push: onComments, fail: onError, live: true };
+        t.subs.push(sub);
+        return function () { sub.live = false; t.unsubscribed++; };
+      };
+    }
+    window.AnnotateConfig = {
+      project: 'transport', reviewId: 'rvw_t', page: params.get('page') || '/t', startOpen: true,
+      spa: params.get('spa') === '1', pollInterval: 60000, transport: transport,
+      // Without a page override the SPA test follows location.pathname.
+    };
+    if (params.get('spa') === '1') delete window.AnnotateConfig.page;
+    window.__wire = function (id, text, page, authorId) {
+      var now = new Date().toISOString();
+      return { schema: 2, id: id, page: page, url: location.href, type: 'pin', author: authorId === 'rvr_t' ? 'Tess' : 'Ann', authorId: authorId || 'rvr_ann', text: text,
+        color: '#ff0000', anchor: null, geom: { kind: 'pin', selector: '#title', x: 0.5, y: 0.5, vw: 1000, vh: 800 },
+        visibility: 'shared', status: 'open', resolved: false, resolvedBy: null, resolvedAt: null, assignee: null, assignedAt: null,
+        replies: [], createdAt: now, updatedAt: now, editedAt: null };
+    };
+    var s = document.createElement('script');
+    s.src = '/annotate.js';
+    document.body.appendChild(s);
+  </script>
+</body>
+</html>

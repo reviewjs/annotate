@@ -189,6 +189,59 @@ Annotate.init({
 `getReviewer` is optional. Without it the viewer is unnamed and never gets
 the review author's controls.
 
+### Live sync with Firebase
+
+Skip the server: comments sync through **your own Firebase project** (Cloud
+Firestore) and reach the review's authors live, without a reload. Needs a
+bundler (or an import map) and the `firebase` SDK (12 or newer, tested with 13.4; an optional
+peer dependency); `annotate.js` itself stays dependency-free.
+
+```js
+import { initializeApp } from "firebase/app";
+import Annotate from "@reviewjs/annotate";
+import { firebaseTransport } from "@reviewjs/annotate/firebase";
+
+const app = initializeApp({ /* your Firebase web config */ });
+Annotate.init({
+  reviewId: "launch-review",
+  transport: firebaseTransport({ app, reviewId: "launch-review" }),
+});
+```
+
+One-time setup:
+
+1. Enable **Cloud Firestore** and **Authentication → Anonymous** (or sign
+   reviewers in however you like and pass `signIn`, or sign them in before `init`).
+2. Deploy the rules: copy `examples/firebase/firestore.rules` and run
+   `firebase deploy --only firestore:rules`. They are what limits who may edit
+   whose comments, so do not skip them.
+3. Create the review in the console or with the Admin SDK:
+   `annotateReviews/launch-review` with `{ name, note, open: true }`
+   (`open` lets any signed-in visitor join as a reviewer, and **joining means
+   reading every comment in the review**; leave it `false` and add members
+   yourself for an invite-only review; `closed: true` stops new feedback).
+4. Make yourself an author: add `annotateReviews/launch-review/members/<your uid>`
+   with `{ role: "author", name: "You" }`. Authors see every comment, reply,
+   assign and close them.
+5. Optional: add a Firestore TTL policy on `comments.purgeAt` (see
+   `examples/firebase/firestore.indexes.json`) so deleted comments are purged.
+
+**Everyone on a review sees everyone's comments and can reply to any of them.**
+Reviewers can create comments and edit, resolve or delete only their own;
+authors can change anyone's and are the only ones who assign. (This is a
+behaviour change from the first version of the adapter, where reviewers saw
+only their own comments, and it differs from the HTTP backend, which keeps
+reviewers apart. A reply can be removed only by its own author or by an
+author, and nobody can write words in another member's name.) Offline edits are queued and sent when the connection returns.
+`Annotate.syncState().live` is `true` while updates are pushed. The emulator
+suites (`npm run test:firebase`, `npm run test:firebase:e2e`) show it end to end. The design and its
+limits (for example, there are no invite links) are in
+`docs/superpowers/specs/2026-11-19-firebase-live-sync-design.md`.
+
+Other databases can plug in the same way: `transport` takes any object that
+answers the [wire protocol](docs/backlog/wire-protocol.md) routes
+(`request(method, path, { body, headers })`, plus optional `subscribe` and `destroy`).
+
 ## Framework integration
 
 For a bundler, install `@reviewjs/annotate`, call `init()` after mount, and
@@ -394,6 +447,7 @@ Annotate.export({ scope: "site" }); // one file with every page's comments
 Annotate.import();            // open the file picker
 await Annotate.submit();      // POST the JSON export to postUrl
 Annotate.refresh();           // manually re-read the current page when spa is off
+Annotate.syncState();        // → { state, pending, live } for a synced review
 Annotate.destroy();           // remove UI, observers, and event listeners
 Annotate.init({ spa: true });  // start again with programmatic settings
 Annotate.clear();             // delete all comments on this page (local)

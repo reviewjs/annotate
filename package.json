@@ -25,6 +25,10 @@
       "types": "./annotate.d.mts",
       "default": "./annotate.mjs"
     },
+    "./firebase": {
+      "types": "./firebase.d.ts",
+      "default": "./firebase.mjs"
+    },
     "./package.json": "./package.json"
   },
   "unpkg": "annotate.js",
@@ -37,6 +41,10 @@
     "annotate.d.cts",
     "examples/feedback-server.cjs",
     "examples/annotate-server.cjs",
+    "firebase.mjs",
+    "firebase.d.ts",
+    "examples/firebase/firestore.rules",
+    "examples/firebase/firestore.indexes.json",
     "README.md",
     "LICENSE"
   ],
@@ -53,7 +61,9 @@
     "test": "playwright test",
     "test:chromium": "playwright test --project=chromium",
     "test:mobile": "playwright test --project=mobile-chrome --project=mobile-safari",
-    "test:report": "playwright show-report"
+    "test:report": "playwright show-report",
+    "test:firebase": "firebase emulators:exec --config examples/firebase/firebase.json --only auth,firestore --project demo-annotate \"node --test scripts/tests/firebase-transport.test.mjs scripts/tests/firestore-rules.test.mjs\"",
+    "test:firebase:e2e": "firebase emulators:exec --config examples/firebase/firebase.json --only auth,firestore --project demo-annotate \"node scripts/build-firebase-e2e.mjs && playwright test tests/firebase.spec.js --project=chromium\""
   },
   "keywords": [
     "annotation",
@@ -65,7 +75,10 @@
     "proofing",
     "no-backend",
     "localstorage",
-    "vanilla-js"
+    "vanilla-js",
+    "firebase",
+    "firestore",
+    "realtime"
   ],
   "license": "MIT",
   "repository": {
@@ -81,7 +94,19 @@
   },
   "author": "Akash Goswami",
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^6.0.0",
     "@playwright/test": "^1.61.0",
+    "esbuild": "^0.28.2",
+    "firebase": "^13.4.0",
+    "firebase-tools": "^15.37.0",
     "serve": "^14.2.6"
+  },
+  "peerDependencies": {
+    "firebase": ">=12.0.0"
+  },
+  "peerDependenciesMeta": {
+    "firebase": {
+      "optional": true
+    }
   }
 }
