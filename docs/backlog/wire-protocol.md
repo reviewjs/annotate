@@ -342,6 +342,21 @@ replays it for a repeat key. Clients treat a replayed `200` and a first
 - Bodies are capped at 256 KB; a `pen` record with 10,000 points is about
   200 KB, so the cap is deliberate.
 
+## Transports
+
+The routes above are the contract, not the HTTP. A client may be given a
+**transport** that answers the same routes in-process (same methods, paths
+relative to `/v1/annotate/reviews/{id}`, statuses and bodies, as a fetch
+`Response`) instead of reaching a server over `fetch`. A transport may also
+**push**: it calls back with the full list of comments the caller may see for a
+page whenever that list changes, which replaces polling `GET …/comments?page=`.
+The client merges a pushed list exactly like a polled one.
+
+The first transport is Cloud Firestore (`@reviewjs/annotate/firebase`). It maps
+the routes onto Firestore transactions and relies on security rules for
+§Visibility instead of server code. This is additive: no field or error code
+changes, so there is no `/v2`.
+
 ## Versioning
 
 The protocol version is in the path (`/v1/annotate`). Additive fields are
