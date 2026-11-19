@@ -58,14 +58,17 @@ test('a reviewer\'s comment reaches the author live, and the author\'s decision 
   await author.context.close(); await reviewer.context.close();
 });
 
-test('another reviewer never sees it', async ({ browser }) => {
+test('every reviewer sees everyone\'s comments, and can reply', async ({ browser }) => {
   const author = await join(browser, { author: true, name: 'Owner' });
   const rita = await join(browser, { name: 'Rita' });
   const sam = await join(browser, { name: 'Sam' });
-  await addPin(rita.page, 'Rita only');
-  await expect(author.page.locator('.an-card', { hasText: 'Rita only' })).toHaveCount(1, { timeout: 10000 });
+  await addPin(rita.page, 'Rita says hi');
+  await expect(author.page.locator('.an-card', { hasText: 'Rita says hi' })).toHaveCount(1, { timeout: 10000 });
+  await expect(sam.page.locator('.an-card', { hasText: 'Rita says hi' })).toHaveCount(1, { timeout: 10000 });
+  const id = await sam.page.evaluate(() => window.Annotate.comments().find(c => c.text === 'Rita says hi').id);
+  // Sam cannot resolve Rita's comment...
+  await sam.page.evaluate(i => window.Annotate.setStatus(i, 'resolved'), id).catch(() => {});
   await sam.page.waitForTimeout(1500);
-  expect(await sam.page.evaluate(() => window.Annotate.comments().length)).toBe(0);
-  await expect(sam.page.locator('.an-card', { hasText: 'Rita only' })).toHaveCount(0);
+  expect(await statusOf(rita.page, 'Rita says hi')).toBe('open');
   for (const u of [author, rita, sam]) await u.context.close();
 });

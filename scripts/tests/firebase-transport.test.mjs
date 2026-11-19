@@ -110,22 +110,42 @@ describe("comments", () => {
 });
 
 describe("visibility and roles", () => {
-  test("reviewers never see each other's comments; the author sees all", async () => {
+  test("every member sees every comment; the page filter still applies", async () => {
     const { alice, bob, author } = await room();
     await call(alice, "PUT", "/comments/ca", wire("ca", "/p"));
     await call(bob, "PUT", "/comments/cb", wire("cb", "/p"));
-    assert.deepEqual((await call(alice, "GET", "/comments?page=%2Fp")).body.comments.map((c) => c.id), ["ca"]);
-    assert.deepEqual((await call(bob, "GET", "/comments?page=%2Fp")).body.comments.map((c) => c.id), ["cb"]);
-    assert.deepEqual((await call(author, "GET", "/comments?page=%2Fp")).body.comments.map((c) => c.id).sort(), ["ca", "cb"]);
+    await call(bob, "PUT", "/comments/cc", wire("cc", "/other"));
+    const ids = async (u, q) => (await call(u, "GET", "/comments" + q)).body.comments.map((c) => c.id).sort();
+    for (const u of [alice, bob, author]) {
+      assert.deepEqual(await ids(u, "?page=%2Fp"), ["ca", "cb"]);
+      assert.deepEqual(await ids(u, "?page=%2Fother"), ["cc"]);
+      assert.deepEqual(await ids(u, ""), ["ca", "cb", "cc"]);
+    }
   });
-  test("another reviewer's comment: PUT/DELETE 403 not_owner, replies and activity 404, reply delete a 204 no-op", async () => {
-    const { alice, bob } = await room();
-    await call(alice, "PUT", "/comments/ca", wire("ca", "/p"));
-    assert.equal((await call(bob, "PUT", "/comments/ca", wire("ca", "/p"))).body.error, "not_owner");
+  test("someone else's comment: any member may reply and read its history, but not edit, resolve or delete it", async () => {
+    const { alice, bob, author } = await room();
+    const made = (await call(alice, "PUT", "/comments/ca", wire("ca", "/p"))).body.comment;
+    // Writes stay with the owner and the authors.
+    assert.equal((await call(bob, "PUT", "/comments/ca", wire("ca", "/p", { text: "hijack", updatedAt: made.updatedAt }))).body.error, "not_owner");
+    assert.equal((await call(bob, "PUT", "/comments/ca", wire("ca", "/p", { status: "resolved", updatedAt: made.updatedAt }))).body.error, "not_owner");
     assert.equal((await call(bob, "DELETE", "/comments/ca")).body.error, "not_owner");
-    assert.equal((await call(bob, "POST", "/comments/ca/replies", { id: "r", text: "hi" })).body.error, "comment_not_found");
-    assert.equal((await call(bob, "GET", "/comments/ca/activity")).status, 404);
-    assert.equal((await call(bob, "DELETE", "/comments/ca/replies/r")).status, 204);
+    // Reads and replies are open to every member.
+    const replied = await call(bob, "POST", "/comments/ca/replies", { id: "rb", text: "Agreed" });
+    assert.equal(replied.status, 201);
+    assert.deepEqual(replied.body.comment.replies.map((r) => [r.id, r.authorId]), [["rb", bob.uid]]);
+    assert.equal((await call(bob, "POST", "/comments/ca/replies", { id: "rb", text: "Agreed" })).status, 200);   // idempotent
+    const log = await call(bob, "GET", "/comments/ca/activity");
+    assert.deepEqual(log.body.events.map((e) => e.kind), ["created", "replied"]);
+    // The comment itself is untouched, and its owner and authors see the reply.
+    const seen = (await call(alice, "GET", "/comments?page=%2Fp")).body.comments[0];
+    assert.deepEqual([seen.text, seen.status, seen.replies.length], ["Hello", "open", 1]);
+    // Removing a reply is a write: only its author on their own comment, or an author.
+    assert.equal((await call(bob, "DELETE", "/comments/ca/replies/rb")).body.error, "not_owner");
+    assert.equal((await call(alice, "DELETE", "/comments/ca/replies/rb")).body.error, "not_owner");
+    assert.equal((await call(author, "DELETE", "/comments/ca/replies/rb")).status, 204);
+    // A deleted comment still answers 410 to a reply.
+    await call(alice, "DELETE", "/comments/ca");
+    assert.equal((await call(bob, "POST", "/comments/ca/replies", { id: "r2", text: "late" })).status, 410);
   });
   test("only authors assign: reviewer's create ignores it, an update is 403 not_author, the author's works", async () => {
     const { alice, author } = await room();
@@ -178,11 +198,12 @@ describe("live subscription", () => {
     assert.deepEqual(seen.at(-1), []);
     await call(alice, "PUT", "/comments/c1", wire("c1", "/p"));
     await until(() => seen.at(-1)?.join() === "c1:Hello");
-    // Someone else's comment never reaches Alice; the author's reply does.
+    // Another member's comment and reply reach Alice too.
     await call(author, "PUT", "/comments/by-author", wire("by-author", "/p"));
-    await call(author, "POST", "/comments/c1/replies", { id: "r1", text: "x" });
-    await until(() => seen.some((l) => l.length) && true);
-    assert.ok(seen.every((l) => l.every((s) => !s.startsWith("by-author"))));
+    await until(() => seen.at(-1)?.slice().sort().join() === "by-author:Hello,c1:Hello");
+    await call(alice, "DELETE", "/comments/by-author").then((r) => assert.equal(r.body.error, "not_owner"));
+    await call(author, "DELETE", "/comments/by-author");
+    await until(() => seen.at(-1)?.join() === "c1:Hello");
     await call(alice, "DELETE", "/comments/c1");
     await until(() => seen.at(-1).length === 0);
     off();
@@ -190,6 +211,17 @@ describe("live subscription", () => {
     await call(alice, "PUT", "/comments/c2", wire("c2", "/p"));
     await sleep(400);
     assert.equal(seen.length, n);
+  });
+  test("another reviewer's reply is pushed to the comment's owner", async () => {
+    const { alice, bob } = await room();
+    await call(alice, "PUT", "/comments/c1", wire("c1", "/p"));
+    let latest = [];
+    const off = alice.transport.subscribe("/p", (list) => { latest = list; }, (e) => assert.fail(e));
+    await until(() => latest.length === 1);
+    await call(bob, "POST", "/comments/c1/replies", { id: "r1", text: "from Bob" });
+    await until(() => latest[0].replies.length === 1);
+    assert.deepEqual(latest[0].replies.map((r) => [r.text, r.authorId]), [["from Bob", bob.uid]]);
+    off();
   });
   test("a refused subscription reports through onError", async () => {
     const review = uniqueReview();

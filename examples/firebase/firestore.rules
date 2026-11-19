@@ -7,10 +7,16 @@ rules_version = '2';
 //   annotateReviews/{review}/comments/{id}      one AnnotateComment (replies embedded)
 //   annotateReviews/{review}/comments/{id}/activity/{event}
 //
-// A reviewer sees and changes only their own comments; an author sees and
-// changes all of them. Comments are never hard-deleted by a client: a delete
-// is an update to a tombstone, which a Firestore TTL policy on `purgeAt`
-// removes later.
+// Every member of a review reads every comment and its activity, and may
+// reply to any comment. Writes are narrower: a reviewer creates comments and
+// edits, resolves or deletes only their own; an author may change anyone's and
+// is the only one who assigns. Comments are never hard-deleted by a client: a
+// delete is an update to a tombstone, which a Firestore TTL policy on
+// `purgeAt` removes later.
+//
+// Membership is the privacy boundary: with `open: true` anyone signed in can
+// join and so can read everything in the review. Keep `open: false` and add
+// members yourself when the comments must not be visible to every visitor.
 service cloud.firestore {
   match /databases/{database}/documents {
     match /annotateReviews/{review} {
@@ -51,12 +57,23 @@ service cloud.firestore {
       match /comments/{id} {
         function mine(data) { return data.authorId == request.auth.uid; }
 
-        // A member may read an id that does not exist yet: creating a comment
-        // is a read-then-write. This reveals that an id is unused, never whose
-        // comment a taken id is (ids are random client values, so nothing useful).
-        allow get: if isAuthor() || (isMember() && (resource == null || mine(resource.data)));
-        // Queries must filter by authorId == the caller (authors may list all).
-        allow list: if isAuthor() || (isMember() && mine(resource.data));
+        // Reads: any member, including an id that does not exist yet (creating
+        // a comment is read-then-write).
+        allow get, list: if isMember();
+
+        // A member who does not own the comment may add exactly one reply and
+        // change nothing else.
+        function appendsOneOwnReply() {
+          let before = resource.data.get('replies', []);
+          let after = request.resource.data.get('replies', []);
+          return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['replies', 'updatedAt'])
+            && after.size() == before.size() + 1
+            && after.size() <= 500
+            // (slicing an empty prefix is a rules evaluation error, hence the guard)
+            && (before.size() == 0 || after[0:before.size()] == before)
+            && after[before.size()].authorId == request.auth.uid
+            && after[before.size()].keys().hasOnly(['id', 'author', 'authorId', 'text', 'createdAt', 'editedAt']);
+        }
 
         allow create: if isMember() && !isClosed()
           && request.resource.data.id == id
@@ -67,19 +84,24 @@ service cloud.firestore {
 
         allow update: if isMember() && !isClosed()
           && resource.data.get('deletedAt', null) == null
-          && (isAuthor() || mine(resource.data))
           && request.resource.data.id == resource.data.id
           && request.resource.data.authorId == resource.data.authorId
-          && (isAuthor() || request.resource.data.get('assignee', null) == resource.data.get('assignee', null));
+          && (
+            ((isAuthor() || mine(resource.data))
+              && (isAuthor() || request.resource.data.get('assignee', null) == resource.data.get('assignee', null)))
+            || appendsOneOwnReply()
+          );
 
         allow delete: if false;
 
         match /activity/{event} {
           function commentData() { return getAfter(/databases/$(database)/documents/annotateReviews/$(review)/comments/$(id)).data; }
-          allow read: if isAuthor() || (isMember() && get(/databases/$(database)/documents/annotateReviews/$(review)/comments/$(id)).data.authorId == request.auth.uid);
+          allow read: if isMember();
           allow create: if isMember() && !isClosed()
             && request.resource.data.by.id == request.auth.uid
-            && (isAuthor() || commentData().authorId == request.auth.uid);
+            // Non-owners may only log their own reply; everything else is the
+            // comment owner's or an author's.
+            && (isAuthor() || commentData().authorId == request.auth.uid || request.resource.data.kind == 'replied');
           allow update, delete: if false;
         }
       }

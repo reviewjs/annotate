@@ -213,20 +213,26 @@ One-time setup:
 1. Enable **Cloud Firestore** and **Authentication → Anonymous** (or sign
    reviewers in however you like and pass `signIn`, or sign them in before `init`).
 2. Deploy the rules: copy `examples/firebase/firestore.rules` and run
-   `firebase deploy --only firestore:rules`. They are what keeps reviewers
-   from seeing each other's comments, so do not skip them.
+   `firebase deploy --only firestore:rules`. They are what limits who may edit
+   whose comments, so do not skip them.
 3. Create the review in the console or with the Admin SDK:
    `annotateReviews/launch-review` with `{ name, note, open: true }`
-   (`open` lets any signed-in visitor join as a reviewer; leave it `false` and
-   add members yourself for an invite-only review; `closed: true` stops new feedback).
+   (`open` lets any signed-in visitor join as a reviewer, and **joining means
+   reading every comment in the review**; leave it `false` and add members
+   yourself for an invite-only review; `closed: true` stops new feedback).
 4. Make yourself an author: add `annotateReviews/launch-review/members/<your uid>`
    with `{ role: "author", name: "You" }`. Authors see every comment, reply,
    assign and close them.
 5. Optional: add a Firestore TTL policy on `comments.purgeAt` (see
    `examples/firebase/firestore.indexes.json`) so deleted comments are purged.
 
-Reviewers see only their own comments plus your replies, exactly as with a
-backend. Offline edits are queued and sent when the connection returns.
+**Everyone on a review sees everyone's comments and can reply to any of them.**
+Reviewers can create comments and edit, resolve or delete only their own;
+authors can change anyone's and are the only ones who assign. (This is a
+behaviour change from the first version of the adapter, where reviewers saw
+only their own comments, and it differs from the HTTP backend, which keeps
+reviewers apart. A reviewer cannot remove their reply from someone else's
+comment; an author can.) Offline edits are queued and sent when the connection returns.
 `Annotate.syncState().live` is `true` while updates are pushed. The emulator
 suites (`npm run test:firebase`, `npm run test:firebase:e2e`) show it end to end. The design and its
 limits (for example, there are no invite links) are in

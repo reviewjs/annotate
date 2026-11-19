@@ -170,19 +170,17 @@ export function firebaseTransport(options) {
   }
 
   // --- comments --------------------------------------------------------------
-  function listQuery(me, page) {
-    const constraints = [];
-    if (page) constraints.push(where("page", "==", page));
-    // Reviewers may only ever query their own comments; the rules require it.
-    if (me.role !== "author") constraints.push(where("authorId", "==", me.uid));
-    return query(commentsCol, ...constraints);
+  function listQuery(page) {
+    // Every member reads every comment in the review (the rules agree); only
+    // writes are restricted to the comment's owner and the authors.
+    return page ? query(commentsCol, where("page", "==", page)) : query(commentsCol);
   }
   function fromSnapshot(snap) {
     return snap.docs.map((d) => d.data()).filter((c) => !c.deletedAt).map(decode)
       .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
   }
   async function list(me, page) {
-    return reply(200, { comments: fromSnapshot(await getDocs(listQuery(me, page))) });
+    return reply(200, { comments: fromSnapshot(await getDocs(listQuery(page))) });
   }
 
   async function put(me, id, body) {
@@ -280,7 +278,7 @@ export function firebaseTransport(options) {
       if (!snap.exists()) return fail(404, "comment_not_found");
       const cur = snap.data();
       if (cur.deletedAt) return fail(410, "deleted");
-      if (me.role !== "author" && cur.authorId !== me.uid) return fail(404, "comment_not_found");
+      // Any member may reply to any comment (a read of it, plus appending one reply).
       const replies = cur.replies || [];
       if (replies.some((r) => r.id === body.id)) return reply(200, { comment: decode(cur) });
       if (replies.length >= MAX_REPLIES) return fail(422, "too_many_replies");
@@ -303,10 +301,12 @@ export function firebaseTransport(options) {
       const cur = snap.data();
       if (cur.deletedAt) return reply(204);
       const isAuthor = me.role === "author";
-      if (!isAuthor && cur.authorId !== me.uid) return reply(204);   // not visible to this caller: a no-op
       const found = (cur.replies || []).find((r) => r.id === replyId);
       if (!found) return reply(204);
-      if (!isAuthor && found.authorId !== me.uid) return fail(403, "not_owner");
+      // Removing a reply is a write. Authors may remove any; a reviewer may
+      // only remove their own reply on their own comment (the rules let a
+      // non-owner append replies, never remove them).
+      if (!isAuthor && (cur.authorId !== me.uid || found.authorId !== me.uid)) return fail(403, "not_owner");
       const t = stamp(cur.updatedAt);
       tx.set(ref, { ...cur, updatedAt: t, replies: cur.replies.filter((r) => r.id !== replyId) });
       tx.set(doc(activityCol(id)), event(me, t, "reply_deleted", { replyId }));
@@ -317,17 +317,12 @@ export function firebaseTransport(options) {
   async function activity(me, id) {
     const snap = await getDoc(commentRef(id));
     if (!snap.exists() || snap.data().deletedAt) return fail(404, "comment_not_found");
-    if (me.role !== "author" && snap.data().authorId !== me.uid) return fail(404, "comment_not_found");
     const events = await getDocs(query(activityCol(id)));
     const out = events.docs.map((d) => d.data()).sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)).slice(0, 1000);
     return reply(200, { events: out });
   }
 
   // --- routing -----------------------------------------------------------------
-  const ifDenied = (promise, response) => promise.catch((e) => {
-    if (e && e.code === "permission-denied") return response();
-    throw e;
-  });
   async function route(method, path, body) {
     const url = new URL(path, "http://annotate.invalid");
     const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
@@ -339,14 +334,11 @@ export function firebaseTransport(options) {
     const id = parts[1];
     if (parts.length === 1 && method === "GET") return list(me, url.searchParams.get("page"));
     if (id && !ID.test(id)) return fail(404, "comment_not_found");
-    // The rules refuse a reviewer even a read of someone else's comment, so a
-    // denial here is the protocol's "that comment is not yours": 403 on
-    // writes, and "does not exist" where the protocol hides it.
-    if (parts.length === 2 && method === "PUT") return ifDenied(put(me, id, body), () => fail(403, "not_owner"));
-    if (parts.length === 2 && method === "DELETE") return ifDenied(remove(me, id), () => fail(403, "not_owner"));
-    if (parts.length === 3 && parts[2] === "activity" && method === "GET") return ifDenied(activity(me, id), () => fail(404, "comment_not_found"));
-    if (parts.length === 3 && parts[2] === "replies" && method === "POST") return ifDenied(addReply(me, id, body), () => fail(404, "comment_not_found"));
-    if (parts.length === 4 && parts[2] === "replies" && method === "DELETE") return ifDenied(removeReply(me, id, parts[3]), () => reply(204));
+    if (parts.length === 2 && method === "PUT") return put(me, id, body);
+    if (parts.length === 2 && method === "DELETE") return remove(me, id);
+    if (parts.length === 3 && parts[2] === "activity" && method === "GET") return activity(me, id);
+    if (parts.length === 3 && parts[2] === "replies" && method === "POST") return addReply(me, id, body);
+    if (parts.length === 4 && parts[2] === "replies" && method === "DELETE") return removeReply(me, id, parts[3]);
     return fail(404, "not_found");
   }
 
@@ -370,7 +362,7 @@ export function firebaseTransport(options) {
       identity().then((me) => {
         if (stopped) return;
         if (!me || !me.role) { onError(new Error("not a member of this review")); return; }
-        off = onSnapshot(listQuery(me, page), (snap) => { if (!stopped) onComments(fromSnapshot(snap)); },
+        off = onSnapshot(listQuery(page), (snap) => { if (!stopped) onComments(fromSnapshot(snap)); },
           (error) => { if (!stopped) onError(error); });
       }, (error) => { if (!stopped) onError(error); });
       return () => { stopped = true; if (off) off(); };

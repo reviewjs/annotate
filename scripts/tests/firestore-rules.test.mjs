@@ -21,7 +21,7 @@ async function setup(reviewData = { name: "R", open: true }) {
 }
 
 describe("comments", () => {
-  test("a reviewer reads and queries only their own", async () => {
+  test("every member reads and lists every comment; non-members read nothing", async () => {
     const { as, path, env } = await setup();
     await env.withSecurityRulesDisabled(async (c) => {
       await setDoc(doc(c.firestore(), ...path("comments", "ca")), comment("ca", "alice"));
@@ -29,13 +29,16 @@ describe("comments", () => {
     });
     const alice = as("alice");
     await assertSucceeds(getDoc(doc(alice, ...path("comments", "ca"))));
-    await assertFails(getDoc(doc(alice, ...path("comments", "cb"))));
-    await assertSucceeds(getDocs(query(collection(alice, ...path("comments")), where("authorId", "==", "alice"))));
-    await assertFails(getDocs(collection(alice, ...path("comments"))));                                              // unfiltered
-    await assertFails(getDocs(query(collection(alice, ...path("comments")), where("authorId", "==", "bob"))));       // someone else's
-    await assertSucceeds(getDocs(collection(as("author"), ...path("comments"))));                                    // authors list all
+    await assertSucceeds(getDoc(doc(alice, ...path("comments", "cb"))));                                             // someone else's
+    await assertSucceeds(getDocs(collection(alice, ...path("comments"))));                                           // unfiltered
+    await assertSucceeds(getDocs(query(collection(alice, ...path("comments")), where("page", "==", "/p"))));
+    await assertSucceeds(getDocs(collection(as("author"), ...path("comments"))));
     await assertSucceeds(getDoc(doc(alice, ...path("comments", "unused-id"))));                                      // creating is read-then-write
-    await assertFails(getDoc(doc(as("stranger"), ...path("comments", "unused-id"))));                                // but only for members
+    const carol = as("carol");                                                                                       // signed in, not a member
+    await assertFails(getDoc(doc(carol, ...path("comments", "ca"))));
+    await assertFails(getDocs(collection(carol, ...path("comments"))));
+    await assertFails(getDoc(doc(carol, ...path("comments", "unused-id"))));
+    await assertFails(getDocs(collection(env.unauthenticatedContext().firestore(), ...path("comments"))));
   });
   test("a reviewer cannot forge authorId, assign, hard-delete, or take over a comment", async () => {
     const { as, path, env } = await setup();
@@ -67,6 +70,73 @@ describe("comments", () => {
   test("a closed review accepts no writes", async () => {
     const { as, path } = await setup({ name: "R", open: true, closed: true });
     await assertFails(setDoc(doc(as("alice"), ...path("comments", "c1")), comment("c1", "alice")));
+  });
+});
+
+describe("replies and activity on someone else's comment", () => {
+  const reply = (id, uid, extra = {}) => ({ id, author: uid, authorId: uid, text: "hello", createdAt: "2026-01-01T00:00:00Z", editedAt: null, ...extra });
+  async function withComment(data = {}, reviewData) {
+    const ctx = await setup(reviewData);
+    await ctx.env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), ...ctx.path("comments", "ca")), comment("ca", "alice", data)));
+    return { ...ctx, ref: (uid) => doc(ctx.as(uid), ...ctx.path("comments", "ca")) };
+  }
+
+  test("a member may append exactly one reply of their own, and nothing else", async () => {
+    const { ref } = await withComment({ replies: [reply("r0", "author")] });
+    const bob = ref("bob"), old = [reply("r0", "author")];
+    await assertSucceeds(updateDoc(bob, { replies: [...old, reply("r1", "bob")], updatedAt: "2026-02-01T00:00:00Z" }));
+  });
+  test("a member may add the first reply to a comment that has none", async () => {
+    const { ref } = await withComment();
+    await assertFails(updateDoc(ref("bob"), { replies: [reply("r1", "alice")] }));                                         // forged first reply
+    await assertFails(updateDoc(ref("bob"), { replies: [reply("r1", "bob"), reply("r2", "bob")] }));                        // two at once
+    await assertSucceeds(updateDoc(ref("bob"), { replies: [reply("r1", "bob")], updatedAt: "2026-02-01T00:00:00Z" }));
+  });
+  test("a reply cannot be forged, stacked, edited, removed or smuggled alongside another change", async () => {
+    const { ref } = await withComment({ replies: [reply("r0", "author")] });
+    const bob = ref("bob"), old = [reply("r0", "author")];
+    await assertFails(updateDoc(bob, { replies: [...old, reply("r1", "alice")] }));                                       // someone else's name
+    await assertFails(updateDoc(bob, { replies: [...old, reply("r1", "bob"), reply("r2", "bob")] }));                      // two at once
+    await assertFails(updateDoc(bob, { replies: [reply("r0", "author", { text: "edited" }), reply("r1", "bob")] }));        // rewrites the thread
+    await assertFails(updateDoc(bob, { replies: [] }));                                                                      // removes a reply
+    await assertFails(updateDoc(bob, { replies: [...old, reply("r1", "bob", { extra: 1 })] }));                              // unknown key
+    await assertFails(updateDoc(bob, { replies: [...old, reply("r1", "bob")], text: "hijacked" }));                          // plus an edit
+    await assertFails(updateDoc(bob, { replies: [...old, reply("r1", "bob")], status: "resolved" }));                        // plus a resolve
+    await assertFails(updateDoc(bob, { replies: [...old, reply("r1", "bob")], assignee: { id: "bob", name: "B" } }));
+    await assertFails(updateDoc(bob, { text: "hijacked" }));
+    await assertFails(updateDoc(bob, { status: "resolved" }));
+    await assertFails(updateDoc(bob, { authorId: "bob" }));
+  });
+  test("no reply on a deleted comment, in a closed review, or by a non-member", async () => {
+    const dead = await withComment({ deletedAt: "2026-01-01T00:00:00Z" });
+    await assertFails(updateDoc(dead.ref("bob"), { replies: [reply("r1", "bob")] }));
+    const closed = await withComment({}, { name: "R", open: true, closed: true });
+    await assertFails(updateDoc(closed.ref("bob"), { replies: [reply("r1", "bob")] }));
+    const open = await withComment();
+    await assertFails(updateDoc(open.ref("carol"), { replies: [reply("r1", "carol")] }));
+  });
+  test("an author is unaffected: edits, resolves, assigns and replies", async () => {
+    const { ref } = await withComment();
+    const author = ref("author");
+    await assertSucceeds(updateDoc(author, { text: "edited", status: "resolved", assignee: { id: "author", name: "O" } }));
+    await assertSucceeds(updateDoc(author, { replies: [reply("r1", "author")] }));
+    await assertFails(updateDoc(author, { authorId: "author" }));
+  });
+  test("any member reads activity; a non-owner may log only their own reply event", async () => {
+    const { as, path, env } = await setup();
+    await env.withSecurityRulesDisabled(async (c) => {
+      await setDoc(doc(c.firestore(), ...path("comments", "ca")), comment("ca", "alice"));
+      await setDoc(doc(c.firestore(), ...path("comments", "ca", "activity", "e0")), { at: "2026-01-01T00:00:00Z", by: { id: "alice", name: "A" }, kind: "created" });
+    });
+    const bob = as("bob");
+    await assertSucceeds(getDoc(doc(bob, ...path("comments", "ca", "activity", "e0"))));
+    await assertSucceeds(getDocs(collection(bob, ...path("comments", "ca", "activity"))));
+    await assertFails(getDocs(collection(as("carol"), ...path("comments", "ca", "activity"))));
+    const event = (kind, uid = "bob") => ({ at: "2026-02-01T00:00:00Z", by: { id: uid, name: "B" }, kind });
+    await assertSucceeds(setDoc(doc(bob, ...path("comments", "ca", "activity", "e1")), event("replied")));
+    await assertFails(setDoc(doc(bob, ...path("comments", "ca", "activity", "e2")), event("status")));                 // not their comment
+    await assertFails(setDoc(doc(bob, ...path("comments", "ca", "activity", "e3")), event("replied", "alice")));      // forged actor
+    await assertFails(setDoc(doc(bob, ...path("comments", "ca", "activity", "e0")), event("replied")));              // no overwrite
   });
 });
 

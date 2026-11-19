@@ -68,8 +68,8 @@ annotateReviews/{review}/comments/{id}      AnnotateComment (schema 2), replies 
 annotateReviews/{review}/comments/{id}/activity/{auto}   ActivityEvent
 ```
 
-- Reviewers query with `authorId == uid`, which is what the rules require, so a
-  reviewer's own list is the only one they can ask for.
+- Every member lists every comment (filtered by `page` when given); `members` can
+  only be listed by authors.
 - A delete is an update to a tombstone that keeps only what is needed to refuse
   stale writes; a Firestore TTL policy on `purgeAt` removes it later.
 - `pen` strokes are flattened (`pointsFlat`) because Firestore rejects nested arrays.
@@ -77,21 +77,36 @@ annotateReviews/{review}/comments/{id}/activity/{auto}   ActivityEvent
 ## Security
 
 The rules are the trust boundary; `firebase.mjs` runs in the attacker's browser.
-`rules` tests attack Firestore directly. Enforced: reviewers see and change only
-their own comments, `authorId` is immutable and must be the caller, only authors
-assign, no client hard-deletes, tombstones cannot be revived, nobody promotes
-themselves, closed reviews take no writes, and joining needs `open: true`.
+`rules` tests attack Firestore directly. Enforced: **every member reads every
+comment and its activity and may reply to any comment** (a non-owner's update may
+change nothing but `replies` and `updatedAt`, and only append one reply of their
+own); a reviewer creates comments and edits, resolves or deletes only their own;
+`authorId` is immutable and must be the caller; only authors assign; no client
+hard-deletes; tombstones cannot be revived; nobody promotes themselves; closed
+reviews take no writes; and joining needs `open: true`.
+
+**Change of behaviour (2026-11-19).** The first version kept reviewers apart
+(each saw only their own comments), as the HTTP protocol's §Visibility does. It
+now lets every member read everything, because the intended use is a client
+review where everyone should see and answer each other's comments. This is a
+deliberate difference from §Visibility and is recorded in the wire protocol's
+Transports section. Consequently **membership is the privacy boundary**: with
+`open: true`, anyone who can sign in can read the whole review.
 
 Known limits, chosen deliberately:
 
 - **Owner-controlled fields.** A reviewer can write any field of their own comment,
-  including forging an author's reply inside it. Only that reviewer and the
-  authors ever see the document. Protecting this needs a Cloud Function.
+  including forging another member's reply inside it. That document is now visible
+  to every member, so a forged reply is too (before, only the owner and the
+  authors saw it). Closing this needs a Cloud Function, or a rule that lets an
+  owner only append their own replies, which would also stop them deleting their
+  own reply.
 - **Client clocks.** `updatedAt` is the stale-check base and comes from the browser.
   The adapter keeps it strictly increasing per document, so skew cannot reorder
   writes, but it is not a trusted timestamp.
-- **Existence of an id.** A member can learn that a comment id is taken (creating
-  is read-then-write). Ids are random client values, so this reveals nothing useful.
+- **Reply removal.** The rules let a non-owner append a reply, never remove one, so
+  a reviewer cannot delete their own reply on someone else's comment (the adapter
+  answers `403 not_owner`); an author can.
 - **Document size.** Replies are embedded; Firestore's 1 MiB limit applies
   (the adapter answers 413). Activity events are not removed with the tombstone.
 - **Invites.** There is no invite-link flow. Reviews are `open` (any signed-in
