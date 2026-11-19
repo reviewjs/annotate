@@ -62,7 +62,8 @@
     "test:chromium": "playwright test --project=chromium",
     "test:mobile": "playwright test --project=mobile-chrome --project=mobile-safari",
     "test:report": "playwright show-report",
-    "test:firebase": "firebase emulators:exec --config examples/firebase/firebase.json --only auth,firestore --project demo-annotate \"node --test scripts/tests/firebase-transport.test.mjs scripts/tests/firestore-rules.test.mjs\""
+    "test:firebase": "firebase emulators:exec --config examples/firebase/firebase.json --only auth,firestore --project demo-annotate \"node --test scripts/tests/firebase-transport.test.mjs scripts/tests/firestore-rules.test.mjs\"",
+    "test:firebase:e2e": "firebase emulators:exec --config examples/firebase/firebase.json --only auth,firestore --project demo-annotate \"node scripts/build-firebase-e2e.mjs && playwright test tests/firebase.spec.js --project=chromium\""
   },
   "keywords": [
     "annotation",

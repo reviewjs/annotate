@@ -24,6 +24,38 @@ jobs:
       - name: Run server tests
         run: npm run test:server
 
+  firebase:
+    name: Firebase transport (emulators)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # The Firestore emulator is a Java program.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: Security rules and wire-protocol conformance
+        run: npm run test:firebase
+      - name: Live sync in two browsers
+        run: npm run test:firebase:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: firebase-test-results
+          path: |
+            test-results/
+            firebase-debug.log
+            firestore-debug.log
+          retention-days: 14
+
   test:
     name: Playwright (${{ matrix.project }})
     runs-on: ubuntu-latest
