@@ -237,7 +237,12 @@ const createController = function (host) {
         API_BASE = apiUrl.href.replace(/\/+$/, "") + "/v1/annotate/reviews/" + encodeURIComponent(CFG.reviewId);
     } catch (e) {}
   }
-  var REMOTE = !!API_BASE;
+  // A database adapter (Firebase, ...) can stand in for the HTTP backend. It
+  // answers the same routes in-process, so everything below the request
+  // (queue, conflicts, merging) is shared. Object-only, like `auth`.
+  var transport = globalConfig.transport && typeof globalConfig.transport.request === "function" && CFG.reviewId
+    ? globalConfig.transport : null;
+  var REMOTE = !!(API_BASE || transport);
   var STORE_KEY = REMOTE ? "annotate:remote:" + CFG.reviewId : LOCAL_STORE_KEY;
   function dbRead() {
     var d;
@@ -516,7 +521,7 @@ const createController = function (host) {
     token: null, expiresAt: 0, reviewer: null, sessionPromise: null, refused: false,
     inflight: null, timer: 0, pollTimer: 0, polling: false, etag: "", etagPage: "",
     failures: 0, offline: false, held: false, state: "", acks: 0, waiters: [], controllers: new Set(),
-    baselined: {},
+    baselined: {}, unsubscribe: null, subPage: "", resync: false, ackedAt: 0, lastList: null, settle: 0,
   };
   var queueOk = true, queueMem = [];
 
@@ -603,10 +608,10 @@ const createController = function (host) {
     try { window.dispatchEvent(new window.CustomEvent(name, { detail: detail })); } catch (e) {}
   }
   function syncState() {
-    if (!REMOTE) return { state: "local", pending: 0 };
+    if (!REMOTE) return { state: "local", pending: 0, live: false };
     var pending = readQueue().length;
     var s = sync.held ? "error" : sync.offline ? "offline" : pending ? "pending" : "idle";
-    return { state: s, pending: pending };
+    return { state: s, pending: pending, live: !!sync.unsubscribe };
   }
   var SYNC_TEXT = {
     idle: "Sent to the review. The author sees your comments as you post them; there is nothing to submit.",
@@ -639,11 +644,14 @@ const createController = function (host) {
     var h = Object.assign({}, headers || {});
     if (sync.token) h.Authorization = "Bearer " + sync.token;
     if (body !== undefined) h["Content-Type"] = "application/json";
-    return window.fetch(API_BASE + path, {
-      method: method, headers: h, credentials: CFG.credentials, cache: "no-store",
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: controller ? controller.signal : undefined,
-    }).then(function (res) {
+    var request = transport
+      ? Promise.resolve().then(function () { return transport.request(method, path, { body: body, headers: h }); })
+      : window.fetch(API_BASE + path, {
+        method: method, headers: h, credentials: CFG.credentials, cache: "no-store",
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: controller ? controller.signal : undefined,
+      });
+    return request.then(function (res) {
       if (res.status === 204 || res.status === 304) return { res: res, data: null };
       return res.json().then(function (data) { return { res: res, data: data }; }, function () { return { res: res, data: null }; });
     }).finally(function () { clearTimeout(timeout); if (controller) sync.controllers.delete(controller); });
@@ -702,7 +710,9 @@ const createController = function (host) {
       }).then(function () { return sync.token; });
     } else {
       var invite = store.get(INVITE_KEY);
-      var body = invite ? { invite: invite } : state.author ? { name: state.author } : null;
+      // A transport knows its own sign-in (a Firebase user, say), so it is
+      // always asked; over HTTP an invite or a name is needed first.
+      var body = invite ? { invite: invite } : state.author ? { name: state.author } : transport ? {} : null;
       if (!body) return Promise.resolve(null);
       sync.token = null;
       p = apiFetch("POST", "/session", body).then(function (r) {
@@ -766,11 +776,12 @@ const createController = function (host) {
     stopSync();
     STORE_KEY = LOCAL_STORE_KEY;
     state.authorId = null;
-    dispatch("annotate:sync", { state: "local", pending: 0 });
+    dispatch("annotate:sync", { state: "local", pending: 0, live: false });
     if (booted) { loadData(); renderFooter(); }
   }
   function stopSync() {
-    clearTimeout(sync.timer); clearTimeout(sync.pollTimer);
+    clearTimeout(sync.timer); clearTimeout(sync.pollTimer); clearTimeout(sync.settle);
+    unsubscribe();
     sync.controllers.forEach(function (c) { c.abort(); });
     sync.controllers.clear();
     settleWaiters(new Error("Sync stopped"));
@@ -781,7 +792,53 @@ const createController = function (host) {
       if (!token) return;
       scheduleFlush(0);
       poll();
+      subscribe();
     }, function () { networkFailure(); });
+  }
+
+  // Live updates. A transport that can push (Firestore onSnapshot, ...) hands
+  // over the page's full visible list on every change; it goes through the
+  // same merge as a poll, so pending local work is never overwritten. Polling
+  // stays on as a slow safety net.
+  function unsubscribe() {
+    var off = sync.unsubscribe, page = sync.subPage;
+    sync.unsubscribe = null; sync.subPage = "";
+    if (off) { try { off(); } catch (e) {} }
+    return page;
+  }
+  function subscribe() {
+    if (!REMOTE || destroyed || !transport || typeof transport.subscribe !== "function" || !sync.token) return;
+    var page = wirePage(PAGE);
+    if (sync.unsubscribe && sync.subPage === page) return;
+    unsubscribe();
+    var localKey = PAGE, active = true, off;
+    try {
+      off = transport.subscribe(page, function (list) {
+        if (!active || destroyed || !REMOTE || PAGE !== localKey || !Array.isArray(list)) return;
+        // Same guard as poll(): a write acknowledged while this snapshot was
+        // in flight may be missing from it, so read again instead of regress.
+        sync.offline = false; syncChanged();
+        if (sync.inflight) { sync.resync = true; return; }
+        // Right after an ack the snapshot may predate our own write; keep
+        // records it does not list, then re-check once it has settled.
+        var recent = Date.now() - sync.ackedAt < 1500;
+        sync.lastList = list;
+        mergeServerPage(list, recent);
+        clearTimeout(sync.settle);
+        if (recent) sync.settle = setTimeout(function () {
+          if (sync.lastList === list && !destroyed && REMOTE) mergeServerPage(list);
+        }, 1600);
+      }, function () {
+        if (!active || destroyed || !REMOTE) return;
+        // The database refused the subscription (rules, signed out): same
+        // outcome as a refused session.
+        sessionRefused("subscription_failed", false, "The review database refused live updates for this browser.");
+      });
+    } catch (e) { return; }
+    if (typeof off !== "function") return;
+    sync.unsubscribe = function () { active = false; off(); };
+    sync.subPage = page;
+    syncChanged();
   }
 
   function scheduleFlush(delay) {
@@ -822,6 +879,8 @@ const createController = function (host) {
     sendOp(op).then(function (r) {
       sync.inflight = null;
       handleResponse(op, r);
+      // A live snapshot arrived mid-write and was set aside: read again now.
+      if (sync.resync && !destroyed) { sync.resync = false; sync.etag = ""; poll(); }
     }, function () {
       sync.inflight = null;
       if (destroyed) return;
@@ -913,7 +972,7 @@ const createController = function (host) {
     }
     dropOps(function (o) { return o.key === op.key; });
     if (res.ok) {
-      sync.acks++;
+      sync.acks++; sync.ackedAt = Date.now();
       if (data.comment) applyServer(data.comment, null);
       else if (op.t === "del") forgetRecord(op.id);
     } else {
@@ -986,7 +1045,7 @@ const createController = function (host) {
   // Server page list → cache. Records with pending ops keep their local
   // form; a cached record the server no longer lists, with no pending op and
   // a server stamp, was deleted elsewhere.
-  function mergeServerPage(list) {
+  function mergeServerPage(list, keepMissing) {
     var d = dbRead(), stamps = serverStamps(d), q = readQueue(), seen = {};
     var byId = {};
     d.comments.forEach(function (c) { if (c && typeof c.id === "string") byId[c.id] = c; });
@@ -1016,7 +1075,8 @@ const createController = function (host) {
     d.comments.forEach(function (c) {
       if (!c || c.page !== PAGE || seen[c.id]) return;
       if (pending[c.id]) { kept.push(c); return; }
-      if (stamps[c.id]) { delete stamps[c.id]; delete marks[c.id]; removed++; return; }   // deleted remotely
+      if (stamps[c.id] && !keepMissing) { delete stamps[c.id]; delete marks[c.id]; removed++; return; }   // deleted remotely
+      if (stamps[c.id]) { kept.push(c); return; }   // maybe our own write, not in this snapshot yet
       kept.push(c);   // never reached the server (private, or rejected): stays local
     });
     var pageList = kept.filter(function (c) { return c && c.page === PAGE; })
@@ -1067,7 +1127,7 @@ const createController = function (host) {
     if (!REMOTE || destroyed) return;
     clearTimeout(sync.pollTimer);
     if (document.hidden) return;   // resumed on visibilitychange
-    sync.pollTimer = setTimeout(poll, CFG.pollInterval);
+    sync.pollTimer = setTimeout(poll, sync.unsubscribe ? Math.max(CFG.pollInterval, 60000) : CFG.pollInterval);
     if (!sync.token || sync.polling) return;
     var page = wirePage(PAGE), localKey = PAGE, acks = sync.acks;
     if (sync.etagPage !== page) { sync.etag = ""; sync.etagPage = page; }
@@ -3847,6 +3907,7 @@ const createController = function (host) {
       // persist them against the new URL. Defer DOM rendering for the router.
       syncPageKey();
       clearTimeout(routeTimer); routeTimer = setTimeout(function () { loadData(); }, 0);
+      subscribe();   // live transports follow the page; a no-op when the page key is unchanged
     }
     listen(window, "popstate", navigate);
     ["pushState", "replaceState"].forEach(function (name) {
@@ -3918,6 +3979,7 @@ const createController = function (host) {
       frames.forEach(function (id) { window.cancelAnimationFrame(id); }); frames.clear();
       if (postController) postController.abort();
       stopSync();
+      if (transport && typeof transport.destroy === "function") { try { transport.destroy(); } catch (e) {} }
       objectUrls.forEach(function (url) { URL.revokeObjectURL(url); }); objectUrls.clear();
       document.body && document.body.classList.remove("an-drawing", "an-highlighting");
       if (uiHost) uiHost.remove();

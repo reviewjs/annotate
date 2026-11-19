@@ -32,6 +32,26 @@ export interface AnnotateConfig {
   credentials?: 'omit' | 'same-origin' | 'include';
   /** Integrator-managed auth. Replaces the built-in invite-link exchange. */
   auth?: AnnotateAuth;
+  /**
+   * A database adapter (see `@reviewjs/annotate/firebase`) that answers the
+   * wire-protocol routes in-process instead of over HTTP. Requires reviewId;
+   * `api` is not needed. Object-only: it cannot come from data-* attributes.
+   */
+  transport?: AnnotateTransport;
+}
+
+/** Same routes, statuses and bodies as docs/backlog/wire-protocol.md, minus the `/v1/annotate/reviews/{id}` prefix. */
+export interface AnnotateTransport {
+  /** `path` is relative to the review, e.g. "/session" or "/comments?page=%2Fpricing". Resolve with a fetch Response. */
+  request(method: string, path: string, init: { body?: unknown; headers: Record<string, string> }): Promise<Response>;
+  /**
+   * Optional live updates. Call `onComments` with the page's full visible list
+   * on every change; call `onError` if the subscription is refused. Return the
+   * function that stops it.
+   */
+  subscribe?(page: string, onComments: (comments: AnnotateComment[]) => void, onError: (error: unknown) => void): () => void;
+  /** Called once from `Annotate.destroy()`. */
+  destroy?(): void;
 }
 
 export interface AnnotateAuth {
@@ -123,6 +143,8 @@ export interface AnnotateComment {
 export interface AnnotateSyncState {
   state: 'local' | 'idle' | 'pending' | 'offline' | 'error';
   pending: number;
+  /** True while a transport pushes updates (no polling needed). */
+  live?: boolean;
 }
 
 export interface FeedbackExport {
