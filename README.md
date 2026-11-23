@@ -152,6 +152,7 @@ browser. The author's dashboard hands out this tag and the invite links:
 | `data-api` | The backend origin. Without it the page stays local-only, exactly as above. |
 | `data-review-id` | The review this page belongs to. |
 | `data-credentials` | `omit` (default), `same-origin` or `include`. Whether backend and `data-post-url` requests carry cookies. Use `same-origin` when the backend shares the page's origin behind a cookie sign-in (an identity-aware proxy, for example). A cross-origin backend needs CORS with `Access-Control-Allow-Credentials` for `include`. |
+| `data-page-watch` | `false` turns off the page-change check. On by default with a backend. |
 
 Reviewers arrive through a personal link, `https://your-site/page?an_invite=…`.
 The token is stored for that review in the reviewer's browser and removed from
@@ -165,6 +166,15 @@ site addresses registered on the review may use it.
 - When the backend refuses (link revoked or expired, review closed, address not
   registered, or no link at all), the panel says why and what to do next, and
   comments stay in the browser; Download or Copy sends them by email.
+- If the page is edited while a reviewer has it open, a "This page was updated"
+  banner with a Refresh button appears in the panel. Each poll sends a
+  same-origin `HEAD` for the page's own URL and compares its `ETag` (or
+  `Last-Modified`) with the first one seen; a host that sends neither is left
+  alone. Nothing re-renders, so unsent drafts stay, and Refresh asks before
+  discarding one.
+- The panel lists the newest comment first. A sort menu next to the filters
+  switches to oldest first or latest activity (newest reply); the choice is
+  remembered in the browser, and comment numbers keep following creation order.
 - In a synced review there is nothing to submit: the footer reads "Sent to the
   review" as soon as a comment is posted.
 

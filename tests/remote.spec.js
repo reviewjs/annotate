@@ -56,9 +56,9 @@ async function openReview(page, route, { invite } = {}) {
 async function waitForAuth(page) {
   await page.waitForFunction(() => window.__events.some(e => e.name === 'annotate:auth'));
 }
-async function addPin(page, text) {
+async function addPin(page, text, target = '#title') {
   await page.keyboard.press('p');
-  await page.locator('#title').click();
+  await page.locator(target).click();
   const composer = page.locator('#__an_compose');
   await expect(composer).toHaveClass(/an-show/);
   await composer.locator('textarea').fill(text);
@@ -442,4 +442,82 @@ test('exports are schema v2 and never carry runtime keys', async ({ page }) => {
   const keys = JSON.stringify(payload).match(/"__[a-zA-Z]+"/g);
   expect(keys).toBeNull();
   expect(payload.comments[0]).toMatchObject({ schema: 2, status: 'open', authorId: 'rvr_alice', visibility: 'shared' });
+});
+
+test.describe('data-api resolution', () => {
+  for (const base of ['/', './', '/api/']) {
+    test(`data-api="${base}" still enables sync`, async ({ page }) => {
+      const warnings = [];
+      page.on('console', m => { if (m.type() === 'warning') warnings.push(m.text()); });
+      await page.goto('/tests/fixtures/remote?' + new URLSearchParams({ api: base, review: REVIEW, page: fixturePath() }));
+      await page.waitForFunction(() => !!window.Annotate);
+      await page.evaluate(() => window.Annotate.open());
+      await expect(page.locator('#__an_syncnote')).toBeAttached();
+      expect(warnings.filter(w => w.includes('[annotate]'))).toEqual([]);
+    });
+  }
+
+  for (const [base, message] of [['ftp://example.test', 'data-api must be an http(s) URL'], ['//', 'data-api is not a valid URL']]) {
+    test(`data-api="${base}" warns in the console and the panel footer`, async ({ page }) => {
+      const warnings = [];
+      page.on('console', m => { if (m.type() === 'warning') warnings.push(m.text()); });
+      await page.goto('/tests/fixtures/remote?' + new URLSearchParams({ api: base, review: REVIEW, page: fixturePath() }));
+      await page.waitForFunction(() => !!window.Annotate);
+      await page.evaluate(() => window.Annotate.open());
+      await expect(page.locator('#__an_localnote')).toContainText(message);
+      expect(warnings.some(w => w.includes('[annotate]') && w.includes('sync is off'))).toBe(true);
+    });
+  }
+});
+
+test.describe('page watch', () => {
+  async function openWatched(page, etag, query = {}) {
+    await page.route('**/tests/fixtures/remote*', async route => {
+      if (route.request().method() !== 'HEAD') return route.continue();
+      await route.fulfill({ status: 200, headers: { ETag: etag.value, 'Content-Type': 'text/html' } });
+    });
+    await page.goto('/tests/fixtures/remote?' + new URLSearchParams({ api, review: REVIEW, page: fixturePath(), an_invite: 'inv_alice', ...query }));
+    await page.waitForFunction(() => !!window.Annotate);
+    await page.evaluate(() => window.Annotate.open());
+  }
+
+  test('a changed page offers a Refresh banner and leaves the comment list alone', async ({ page }) => {
+    const etag = { value: '"v1"' };
+    await openWatched(page, etag);
+    await addPin(page, 'Existing comment');
+    await expect(page.locator('#__an_updated')).not.toHaveClass(/an-show/);
+    await page.waitForTimeout(1600);   // several polls with an unchanged version
+    await expect(page.locator('#__an_updated')).not.toHaveClass(/an-show/);
+    etag.value = '"v2"';
+    await expect(page.locator('#__an_updated')).toHaveClass(/an-show/, { timeout: 8000 });
+    await expect(page.locator('#__an_updated button')).toHaveText('Refresh');
+    await expect(page.locator('.an-card', { hasText: 'Existing comment' })).toHaveCount(1);
+  });
+
+  test('data-page-watch="false" disables the check', async ({ page }) => {
+    const etag = { value: '"v1"' };
+    await openWatched(page, etag, { watch: '0' });
+    await page.evaluate(() => {});
+    etag.value = '"v2"';
+    await page.waitForTimeout(2000);
+    await expect(page.locator('#__an_updated')).not.toHaveClass(/an-show/);
+  });
+});
+
+test('the comments panel lists the newest comment first and can be re-sorted', async ({ page }) => {
+  await openReview(page, fixturePath(), { invite: 'inv_alice' });
+  await waitForAuth(page);
+  await addPin(page, 'First comment');
+  await page.waitForTimeout(20);
+  await addPin(page, 'Second comment', '#para');
+  const texts = () => page.locator('.an-card .an-body').allInnerTexts();
+  await expect.poll(async () => (await texts()).map(t => t.trim())).toEqual(['Second comment', 'First comment']);
+  await page.locator('#__an_sort').selectOption('oldest');
+  await expect.poll(async () => (await texts()).map(t => t.trim())).toEqual(['First comment', 'Second comment']);
+  // Card numbers follow creation order whatever the sort, and the choice is remembered.
+  await expect(page.locator('.an-card .an-tag').first()).toContainText('#1');
+  await page.reload();
+  await page.waitForFunction(() => !!window.Annotate);
+  await page.evaluate(() => window.Annotate.open());
+  await expect(page.locator('#__an_sort')).toHaveValue('oldest');
 });

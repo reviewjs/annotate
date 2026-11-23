@@ -21,6 +21,7 @@
     script.dataset.page = params.get('page') || '';
     script.dataset.startOpen = 'true';
     script.dataset.pollInterval = '700';
+    if (params.get('watch') === '0') script.dataset.pageWatch = 'false';
     document.body.appendChild(script);
   </script>
 </body>

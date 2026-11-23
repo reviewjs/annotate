@@ -25,6 +25,11 @@ export interface AnnotateConfig {
   /** Poll interval in milliseconds for remote reads. Default 20000, minimum 500. */
   pollInterval?: number;
   /**
+   * With a backend, compare this page's ETag or Last-Modified on every poll and
+   * offer a Refresh banner when it changes. Default true; set false to disable.
+   */
+  pageWatch?: boolean;
+  /**
    * Fetch credentials mode for backend (api) and postUrl requests. Default
    * "omit". Use "same-origin" for a same-origin backend behind a cookie
    * sign-in, or "include" for a cross-origin one that allows credentials.
@@ -68,6 +73,7 @@ export interface ResolvedAnnotateConfig {
   reviewId: string;
   inviteParam: string;
   pollInterval: number;
+  pageWatch: boolean;
   credentials: 'omit' | 'same-origin' | 'include';
 }
 

@@ -136,11 +136,14 @@
     share: String(scriptData.shareEmail || globalConfig.shareEmail || "").trim(),
     spa: truthy(scriptData.spa !== undefined ? scriptData.spa : globalConfig.spa),
     postUrl: String(scriptData.postUrl || globalConfig.postUrl || "").trim(),
-    api: String(scriptData.api || globalConfig.api || "").trim().replace(/\/+$/, ""),
+    // Kept raw: "/" is a valid same-origin base, so slashes are stripped only after resolving.
+    api: String(scriptData.api || globalConfig.api || "").trim(),
     reviewId: String(scriptData.reviewId || globalConfig.reviewId || "").trim(),
     inviteParam: String(scriptData.inviteParam || globalConfig.inviteParam || "an_invite").trim(),
     pollInterval: Math.max(500, Number(scriptData.pollInterval || globalConfig.pollInterval) || 20000),
     credentials: fetchCredentials(scriptData.credentials || globalConfig.credentials),
+    // Watch the page itself for edits made while it is open. Default on with a backend.
+    pageWatch: !/^(0|false|off|no)$/i.test(String(scriptData.pageWatch !== undefined ? scriptData.pageWatch : globalConfig.pageWatch !== undefined ? globalConfig.pageWatch : "")),
   };
   // Integrator-supplied auth ({ getToken, onUnauthorized, getReviewer }) is object-only,
   // so it can come from AnnotateConfig / init() but never from data-*.
@@ -184,6 +187,7 @@
       document.getElementById("__an_unsaved").remove();
     }
   }
+  var SORTS = { newest: "Newest first", oldest: "Oldest first", activity: "Latest activity" };
   var COLORS = [
     { name: "Amber", hex: "#f59e0b" },
     { name: "Rose", hex: "#f43f5e" },
@@ -205,6 +209,7 @@
     panelOpen: false,
     activeId: null,
     filter: "open", // open | resolved | all
+    sort: SORTS[store.get("an-sort")] ? store.get("an-sort") : "newest", // newest | oldest | activity
     query: "",
     enabled: store.get("an-off") !== "1", // master on/off
   };
@@ -273,13 +278,19 @@
   // With a backend the blob is a per-review cache, kept apart from local-only
   // comments so the two never mix.
   var API_BASE = "";
+  // Set when data-api is present but cannot be used, so the page never goes local-only silently.
+  var API_PROBLEM = "";
   if (CFG.api && CFG.reviewId) {
     try {
       var apiUrl = new URL(CFG.api, location.href);
       if (/^https?:$/.test(apiUrl.protocol))
         API_BASE = apiUrl.href.replace(/\/+$/, "") + "/v1/annotate/reviews/" + encodeURIComponent(CFG.reviewId);
-    } catch (e) {}
+      else API_PROBLEM = "data-api must be an http(s) URL, so sync is off.";
+    } catch (e) { API_PROBLEM = "data-api is not a valid URL, so sync is off."; }
+  } else if (CFG.api) {
+    API_PROBLEM = "data-api is set without data-review-id, so sync is off.";
   }
+  if (API_PROBLEM && typeof console !== "undefined" && console.warn) console.warn("[annotate] " + API_PROBLEM + " (data-api=" + JSON.stringify(CFG.api) + ")");
   var REMOTE = !!API_BASE;
   var STORE_KEY = REMOTE ? "annotate:remote:" + CFG.reviewId : LOCAL_STORE_KEY;
   function dbRead() {
@@ -1106,12 +1117,51 @@
     if (!REMOTE) return;
     setReadMark(id, serverStamps(dbRead())[id]);
   }
+  // PAGE WATCH — each poll tick, a same-origin HEAD of this page's own URL is
+  // compared with the first version seen (ETag, else Last-Modified). A change
+  // shows a non-blocking banner; nothing re-renders, so drafts are untouched.
+  var pageWatch = { versions: {}, inflight: false, changed: false, off: !CFG.pageWatch };
+  function probePage() {
+    if (!REMOTE || destroyed || pageWatch.off || pageWatch.inflight || pageWatch.changed) return;
+    if (typeof fetch !== "function") return;
+    var url = location.href.split("#")[0];
+    pageWatch.inflight = true;
+    fetch(url, { method: "HEAD", cache: "no-store", credentials: "same-origin" })
+      .then(function (res) {
+        if (destroyed) return;
+        if (res.status === 405 || res.status === 501) { pageWatch.off = true; return; }
+        if (!res.ok) return;
+        var v = res.headers.get("ETag") || res.headers.get("Last-Modified") || "";
+        if (!v) { pageWatch.off = true; return; }   // nothing to compare on this host
+        var seen = pageWatch.versions[url];
+        if (seen === undefined) pageWatch.versions[url] = v;
+        else if (seen !== v) pageChanged();
+      }, function () {})
+      .finally(function () { pageWatch.inflight = false; });
+  }
+  function pageChanged() {
+    if (pageWatch.changed) return;
+    pageWatch.changed = true;
+    if (updatedEl) updatedEl.classList.add("an-show");
+    toast("This page was updated.", { kind: "info", duration: 12000, action: "Refresh", onAction: refreshPage });
+  }
+  function hasUnsentDraft() {
+    var found = false;
+    if (uiHost) Array.prototype.forEach.call(uiHost.querySelectorAll("textarea"), function (t) { if (t.value.trim()) found = true; });
+    return found;
+  }
+  function refreshPage() {
+    if (hasUnsentDraft() && !window.confirm("You have an unsent draft. Refresh anyway and lose it?")) return;
+    location.reload();
+  }
   function poll() {
     if (!REMOTE || destroyed) return;
     clearTimeout(sync.pollTimer);
     if (document.hidden) return;   // resumed on visibilitychange
     sync.pollTimer = setTimeout(poll, CFG.pollInterval);
-    if (!sync.token || sync.polling) return;
+    if (!sync.token) return;
+    probePage();
+    if (sync.polling) return;
     var page = wirePage(PAGE), localKey = PAGE, acks = sync.acks;
     if (sync.etagPage !== page) { sync.etag = ""; sync.etagPage = page; }
     sync.polling = true;
@@ -1374,6 +1424,9 @@
   .an-chip:hover { border-color: var(--an-border-strong); color: var(--an-fg); }
   .an-chip.an-on { background: var(--an-btn-bg); color: var(--an-btn-fg);
     border-color: var(--an-btn-bg); }
+  .an-sort { margin-left:auto; padding:3px 6px; border-radius:20px; border:1px solid var(--an-border);
+    background: var(--an-surface); color: var(--an-muted); font:500 12px var(--an-font); cursor:pointer; }
+  .an-sort:hover { border-color: var(--an-border-strong); color: var(--an-fg); }
   .an-list { flex:1; overflow-y:auto; padding:8px 12px 16px; }
   .an-list::-webkit-scrollbar { width:8px; }
   .an-list::-webkit-scrollbar-thumb { background: var(--an-border-strong); border-radius:4px; }
@@ -1573,6 +1626,15 @@
     font:13px/1.45 var(--an-font); color: var(--an-fg);
     overflow-wrap:anywhere; }
   #__an_note.an-show { display:flex; }
+  #__an_updated { display:none; align-items:center; gap:9px;
+    margin:0 16px 10px; padding:9px 12px; border-radius:11px;
+    background: var(--an-surface-2); border:1px solid var(--an-border-strong);
+    font:13px/1.4 var(--an-font); color: var(--an-fg); }
+  #__an_updated.an-show { display:flex; }
+  #__an_updated svg { width:15px; height:15px; flex:none; color: var(--an-muted); }
+  #__an_updated span { flex:1; }
+  #__an_updated button { border:none; background: var(--an-btn-bg); color: var(--an-btn-fg);
+    border-radius:8px; padding:5px 11px; font:600 12px var(--an-font); cursor:pointer; }
   #__an_note svg { width:15px; height:15px; flex:none; color: var(--an-muted); margin-top:1px; }
   #__an_note .an-nlbl { font-weight:700; }
 
@@ -2565,7 +2627,7 @@
   // ==========================================================================
   // TOOLBAR + PANEL UI
   // ==========================================================================
-  var bar, panel, listEl, footEl, countBadge, hintEl, launchEl, helpEl, noteEl;
+  var bar, panel, listEl, footEl, countBadge, hintEl, launchEl, helpEl, noteEl, updatedEl;
   var SIDE = CFG.position === "bottom-left" ? "an-left" : "an-right";
   function buildUI() {
     var style = el("style", { id: "__an_style", html: CSS_TEXT });
@@ -2684,13 +2746,32 @@
       });
       filters.appendChild(ch);
     });
+    var sortSel = el("select", { class: "an-sort", id: "__an_sort", title: "Sort comments", "aria-label": "Sort comments" });
+    Object.keys(SORTS).forEach(function (k) {
+      var o = el("option", { value: k, text: SORTS[k] });
+      if (k === state.sort) o.selected = true;
+      sortSel.appendChild(o);
+    });
+    listen(sortSel, "change", function () {
+      state.sort = SORTS[sortSel.value] ? sortSel.value : "newest";
+      store.set("an-sort", state.sort);
+      renderPanel();
+    });
+    filters.appendChild(sortSel);
     var toolsRow = el("div", { class: "an-toolsrow" }, [search, filters]);
     noteEl = el("div", { id: "__an_note" });
+    updatedEl = el("div", { id: "__an_updated", role: "status" }, [
+      el("span", { html: ICONS.info }),
+      el("span", { text: "This page was updated." }),
+      el("button", { text: "Refresh", onclick: refreshPage }),
+    ]);
     listEl = el("div", { class: "an-list", id: "__an_list" });
     footEl = el("div", { id: "__an_foot" });
     panel.appendChild(header);
     panel.appendChild(toolsRow);
     panel.appendChild(noteEl);
+    panel.appendChild(updatedEl);
+    if (pageWatch.changed) updatedEl.classList.add("an-show");
     panel.appendChild(listEl);
     panel.appendChild(footEl);
     root.appendChild(panel);
@@ -2994,6 +3075,21 @@
       return true;
     });
   }
+  // Panel order only: card numbers (#n) keep following creation order.
+  function lastActivity(c) {
+    var at = c.createdAt || "";
+    if (c.updatedAt && c.updatedAt > at) at = c.updatedAt;
+    (c.replies || []).forEach(function (r) { if (r.createdAt > at) at = r.createdAt; });
+    return at;
+  }
+  function sortedForPanel(list) {
+    var out = list.slice(), by = state.sort === "activity" ? lastActivity : function (c) { return c.createdAt || ""; };
+    out.sort(function (a, b) {
+      var x = by(a), y = by(b);
+      return x < y ? -1 : x > y ? 1 : 0;
+    });
+    return state.sort === "oldest" ? out : out.reverse();
+  }
   // Background renders (sync merges, other tabs) must never eat what the
   // reviewer is typing: open reply/edit boxes, their text, focus and caret
   // are captured by comment id and restored on the rebuilt cards.
@@ -3032,7 +3128,7 @@
     var drafts = captureDrafts();
     listEl.innerHTML = "";
     var unread = unreadIds();
-    var list = visibleComments(unread);
+    var list = sortedForPanel(visibleComments(unread));
     if (!list.length) {
       var msg = state.query
         ? "No comments match “" + esc(state.query) + "”."
@@ -3612,10 +3708,11 @@
     var canShare = !!(state.share && state.share.trim());
     footEl.innerHTML = "";
     var syncNow = syncState();
-    footEl.appendChild(el("div", { class: "an-localnote" + (sync.refusal ? " an-refused" : REMOTE && syncNow.state === "idle" ? " an-synced" : "") }, [
-      el("span", { html: sync.refusal ? ICONS.alert : REMOTE && syncNow.state === "idle" ? ICONS.check : ICONS.info }),
+    var apiWarn = !REMOTE && API_PROBLEM;
+    footEl.appendChild(el("div", { class: "an-localnote" + (sync.refusal || apiWarn ? " an-refused" : REMOTE && syncNow.state === "idle" ? " an-synced" : "") }, [
+      el("span", { html: sync.refusal || apiWarn ? ICONS.alert : REMOTE && syncNow.state === "idle" ? ICONS.check : ICONS.info }),
       REMOTE ? el("span", { id: "__an_syncnote", "data-state": syncNow.state, role: "status", text: SYNC_TEXT[syncNow.state] })
-        : el("span", { id: "__an_localnote", role: "status", text: sync.refusal ? sync.refusal + " " + KEEP_LOCAL : canShare
+        : el("span", { id: "__an_localnote", role: "status", text: sync.refusal ? sync.refusal + " " + KEEP_LOCAL : apiWarn ? API_PROBLEM + " Comments are saved in this browser only." : canShare
         ? "Saved in this browser. Download or share to send your comments."
         : "Saved in this browser. Download to send your comments." }),
     ]));
